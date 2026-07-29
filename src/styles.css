@@ -343,3 +343,36 @@ input, select, textarea { color: var(--text); }
 .reframe-section .proposal-actions .apply { border-color: var(--cyan); background: var(--cyan); color: #071316; font-weight: 850; }
 
 .reframe-section .reframe-status .danger-action { height: 25px; justify-content: center; margin-top: 6px; border-color: rgba(255,107,120,.3); background: rgba(255,107,120,.06); color: #ff9da6; }
+
+
+/* automatic short-form candidate review */
+.shortform-section { background: linear-gradient(160deg, rgba(255,184,77,.08), transparent 72%); }
+.shortform-section .ai-title > span { background: rgba(255,184,77,.13); color: #ffc268; font-size: 12px; font-weight: 900; }
+.shortform-section > button, .shortform-section .proposal-actions button, .shortform-status button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #55442d; border-radius: 7px; background: #1b1711; color: #ddc29a; font-size: 8px; }
+.shortform-section > button:hover:not(:disabled), .shortform-section .proposal-actions button:hover:not(:disabled) { border-color: #ffc268; background: #241d13; color: #ffe4bc; }
+.shortform-section > button span { padding: 2px 5px; border-radius: 4px; background: rgba(255,194,104,.09); color: #ffc268; font-size: 6px; }
+.shortform-message { margin: 8px 0 0; padding: 7px 8px; border-radius: 6px; background: rgba(255,194,104,.07); color: #d4bb95; font-size: 7px; line-height: 1.5; }
+.shortform-message.error { background: rgba(255,107,120,.08); color: #ffafb6; }
+.shortform-status { margin-top: 9px; padding: 9px; border: 1px solid #55442d; border-radius: 8px; background: rgba(31,25,16,.8); }
+.shortform-status > div { display: flex; justify-content: space-between; gap: 8px; color: #d1b98f; font-size: 7px; }
+.shortform-status progress { width: 100%; height: 5px; margin-top: 6px; accent-color: #ffc268; }
+.shortform-section .shortform-status .danger-action { height: 25px; justify-content: center; border-color: rgba(255,107,120,.3); background: rgba(255,107,120,.06); color: #ff9da6; }
+.shortform-review { margin-top: 9px; padding: 9px; border: 1px solid #645033; border-radius: 9px; background: #19150f; }
+.shortform-review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.shortform-review-head strong { color: #f3dfbd; font-size: 9px; }
+.shortform-review-head span { color: #c99e60; font-size: 7px; }
+.shortform-help { margin: 5px 0 7px; color: #927c5e; font-size: 6px; line-height: 1.45; }
+.shortform-list { max-height: 250px; overflow-y: auto; border-top: 1px solid rgba(255,255,255,.06); }
+.shortform-candidate { margin-top: 6px; border: 1px solid #3e3426; border-radius: 8px; background: #12100d; overflow: hidden; }
+.shortform-candidate.selected { border-color: #ffc268; box-shadow: inset 0 0 0 1px rgba(255,194,104,.18); }
+.shortform-section .shortform-candidate button { position: relative; width: 100%; min-height: 84px; display: grid; grid-template-columns: auto 1fr auto; align-content: start; gap: 3px 6px; margin: 0; padding: 8px; border: 0; border-radius: 0; background: transparent; color: inherit; text-align: left; }
+.shortform-section .shortform-candidate button:hover { background: rgba(255,194,104,.05); }
+.shortform-rank { color: #ffc268; font-size: 8px; font-weight: 900; }
+.shortform-score { grid-column: 3; justify-self: end; color: #9cff63; font-size: 7px; font-weight: 800; }
+.shortform-candidate strong { grid-column: 1 / -1; overflow: hidden; color: #ead8bc; font-size: 8px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.shortform-candidate time { grid-column: 1 / -1; color: #9b8260; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 6px; }
+.shortform-candidate small { grid-column: 1 / -1; display: flex; gap: 3px; flex-wrap: wrap; margin-top: 2px; }
+.shortform-candidate small em { padding: 2px 4px; border-radius: 4px; background: rgba(255,194,104,.08); color: #bd9e73; font-size: 6px; font-style: normal; }
+.shortform-section .proposal-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 5px; }
+.shortform-section .proposal-actions button { justify-content: center; margin-top: 7px; }
+.shortform-section .proposal-actions .apply { border-color: #ffc268; background: #ffc268; color: #171006; font-weight: 850; }

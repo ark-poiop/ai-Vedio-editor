@@ -44,6 +44,10 @@
     animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
     sttJob: { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false },
     sttProposal: null, sttPollTimer: 0,
+    shortform: {
+      analyzing: false, applying: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
+      targetDuration: 30, candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
+    },
     reframe: {
       analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
       sampleInterval: 1, method: '', keyframes: [],
@@ -188,6 +192,7 @@
     if (state.past.length > MAX_HISTORY) state.past.shift();
     state.future = [];
     state.project = recalculate(mutator(clone(state.project)));
+    if (!state.shortform.applying) invalidateShortformReview('타임라인이 변경되었습니다. 숏폼 후보를 다시 생성하세요.');
     state.playhead = clamp(state.playhead, 0, state.project.duration);
     scheduleSave();
     renderAll();
@@ -197,6 +202,7 @@
     if (!state.past.length) return;
     state.future.unshift(clone(state.project));
     state.project = state.past.pop();
+    invalidateShortformReview('실행 취소로 타임라인이 변경되었습니다. 후보를 다시 생성하세요.');
     syncReframeDraftWithProject();
     scheduleSave(); renderAll();
   }
@@ -205,6 +211,7 @@
     if (!state.future.length) return;
     state.past.push(clone(state.project));
     state.project = state.future.shift();
+    invalidateShortformReview('다시 실행으로 타임라인이 변경되었습니다. 후보를 다시 생성하세요.');
     syncReframeDraftWithProject();
     scheduleSave(); renderAll();
   }
@@ -433,17 +440,522 @@
     const previousVisualId = currentClip('video')?.id;
     const previousAudioId = currentClip('audio')?.id;
     const delta = Math.min(.1, (timestamp - state.lastFrameAt) / 1000);
+    const playbackEnd = state.shortform.previewEnd || state.project.duration;
     state.lastFrameAt = timestamp;
-    state.playhead = Math.min(state.project.duration, state.playhead + delta);
+    state.playhead = Math.min(playbackEnd, state.playhead + delta);
     if (currentClip('video')?.id !== previousVisualId || currentClip('audio')?.id !== previousAudioId) syncPreview(true);
     else { updatePreviewReframe(); renderPreviewTexts(); renderPlayback(); }
-    if (state.playhead >= state.project.duration) { state.playing = false; state.previewVisual?.pause?.(); state.previewAudio?.pause?.(); renderPlayback(); return; }
+    if (state.playhead >= playbackEnd) {
+      state.playing = false;
+      state.shortform.previewEnd = 0;
+      state.previewVisual?.pause?.(); state.previewAudio?.pause?.(); renderPlayback();
+      return;
+    }
     state.animation = requestAnimationFrame(animate);
   }
 
-  function seek(time) {
+  function seek(time, preserveShortformPreview = false) {
+    if (!preserveShortformPreview) state.shortform.previewEnd = 0;
     state.playhead = clamp(time, 0, state.project.duration);
     syncPreview(true); renderPlayback();
+  }
+
+  function stopPlayback(clearShortformPreview = true) {
+    state.playing = false;
+    cancelAnimationFrame(state.animation);
+    state.previewVisual?.pause?.();
+    state.previewAudio?.pause?.();
+    if (clearShortformPreview) state.shortform.previewEnd = 0;
+    renderPlayback();
+  }
+
+  function invalidateShortformReview(message) {
+    const review = state.shortform;
+    if (!review.analyzing && !review.candidates.length && review.status !== 'applied') return;
+    stopPlayback();
+    state.shortform = {
+      ...review, analyzing: false, applying: false, status: 'idle', progress: 0, message,
+      assetId: '', candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
+      analysisVersion: review.analysisVersion + 1,
+    };
+  }
+
+  function getShortformAsset() {
+    if (state.selection?.kind === 'asset') {
+      const selected = state.project.assets.find((asset) => asset.id === state.selection.id);
+      if (selected?.kind === 'video') return selected;
+    }
+    if (state.selection?.kind === 'clip') {
+      const clip = state.project.clips.find((item) => item.id === state.selection.id && item.trackId === 'video');
+      const selected = clip && state.project.assets.find((asset) => asset.id === clip.assetId);
+      if (selected?.kind === 'video') return selected;
+    }
+    return state.project.assets.find((asset) => asset.kind === 'video');
+  }
+
+  function shortformTimelineRanges(assetId) {
+    return mergeTimeRanges(state.project.clips
+      .filter((clip) => clip.assetId === assetId && clip.trackId === 'video')
+      .map((clip) => ({
+        start: clip.timelineStart,
+        end: clip.timelineStart + clip.sourceEnd - clip.sourceStart,
+      })));
+  }
+
+  function mapSourcePointsToTimeline(assetId, points) {
+    const mapped = state.project.clips
+      .filter((clip) => clip.assetId === assetId && clip.trackId === 'video')
+      .flatMap((clip) => points.flatMap((point) => {
+        if (point.time < clip.sourceStart || point.time >= clip.sourceEnd) return [];
+        return [{ ...point, time: clip.timelineStart + point.time - clip.sourceStart }];
+      }))
+      .sort((first, second) => first.time - second.time);
+    return mapped.filter((point, index) => !index || point.time - mapped[index - 1].time > 0.2
+      || point.strength > mapped[index - 1].strength);
+  }
+
+  function shortformTranscriptSignals(assetId) {
+    const clips = state.project.clips.filter((clip) => clip.assetId === assetId && clip.trackId === 'video');
+    if (state.sttProposal?.assetId === assetId && state.sttProposal.segments.length) {
+      const cues = clips.flatMap((clip) => state.sttProposal.segments.flatMap((segment) => {
+        const sourceStart = Math.max(clip.sourceStart, segment.start);
+        const sourceEnd = Math.min(clip.sourceEnd, segment.end);
+        if (sourceEnd - sourceStart <= 0.03) return [];
+        return [{
+          start: clip.timelineStart + sourceStart - clip.sourceStart,
+          end: clip.timelineStart + sourceEnd - clip.sourceStart,
+          text: String(segment.text || '').trim(), confidence: segment.confidence,
+          speaker: segment.speaker, source: 'stt',
+          complete: segment.start >= clip.sourceStart - 0.04 && segment.end <= clip.sourceEnd + 0.04,
+        }];
+      }));
+      const completeCues = cues
+        .filter((cue) => cue.complete)
+        .sort((first, second) => first.start - second.start);
+      if (completeCues.length) return { source: 'stt', label: 'STT 발화', cues: completeCues };
+    }
+    const coverage = shortformTimelineRanges(assetId);
+    const cues = state.project.texts
+      .filter((text) => text.role === 'caption')
+      .flatMap((text) => coverage.flatMap((range) => {
+        const start = Math.max(text.start, range.start);
+        const end = Math.min(text.end, range.end);
+        return end - start > 0.03 ? [{
+          start, end, text: String(text.text || '').trim(), confidence: text.confidence,
+          speaker: text.speaker, source: 'captions',
+        }] : [];
+      }))
+      .sort((first, second) => first.start - second.start);
+    const unique = cues.filter((cue, index) => !index
+      || Math.abs(cue.start - cues[index - 1].start) > 0.02
+      || Math.abs(cue.end - cues[index - 1].end) > 0.02
+      || cue.text !== cues[index - 1].text);
+    return { source: unique.length ? 'captions' : 'visual', label: unique.length ? '타임라인 자막' : '장면 중심', cues: unique };
+  }
+
+  function shortformSilenceRanges(assetId) {
+    if (state.silence.assetId !== assetId || !state.silence.candidates.length) return [];
+    const sourceRanges = state.silence.candidates.map((candidate) => ({ start: candidate.start, end: candidate.end }));
+    return mergeTimeRanges(state.project.clips
+      .filter((clip) => clip.assetId === assetId && clip.trackId === 'video')
+      .flatMap((clip) => sourceRanges.flatMap((range) => {
+        const sourceStart = Math.max(clip.sourceStart, range.start);
+        const sourceEnd = Math.min(clip.sourceEnd, range.end);
+        if (sourceEnd - sourceStart <= 0.03) return [];
+        return [{
+          start: clip.timelineStart + sourceStart - clip.sourceStart,
+          end: clip.timelineStart + sourceEnd - clip.sourceStart,
+        }];
+      })));
+  }
+
+  function frameColorSignature(context, width, height) {
+    const { data } = context.getImageData(0, 0, width, height);
+    const columns = 4;
+    const rows = 3;
+    const totals = new Array(columns * rows * 3).fill(0);
+    const counts = new Array(columns * rows).fill(0);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const pixel = (y * width + x) * 4;
+        const cellX = Math.min(columns - 1, Math.floor(x / width * columns));
+        const cellY = Math.min(rows - 1, Math.floor(y / height * rows));
+        const cell = cellY * columns + cellX;
+        totals[cell * 3] += data[pixel];
+        totals[cell * 3 + 1] += data[pixel + 1];
+        totals[cell * 3 + 2] += data[pixel + 2];
+        counts[cell] += 1;
+      }
+    }
+    return totals.map((total, index) => total / Math.max(1, counts[Math.floor(index / 3)]) / 255);
+  }
+
+  function signatureDifference(first, second) {
+    if (!first || !second || first.length !== second.length) return 0;
+    return first.reduce((total, value, index) => total + Math.abs(value - second[index]), 0) / first.length;
+  }
+
+  function shortformAbortError() {
+    const error = new Error('숏폼 후보 분석이 취소되었습니다.');
+    error.name = 'AbortError';
+    return error;
+  }
+
+  function shortformAwait(promise, analysisVersion, timeout = 15000) {
+    if (state.shortform.analysisVersion !== analysisVersion) return Promise.reject(shortformAbortError());
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(cancelTimer);
+        clearTimeout(timeoutTimer);
+        callback(value);
+      };
+      const cancelTimer = window.setInterval(() => {
+        if (state.shortform.analysisVersion !== analysisVersion) finish(reject, shortformAbortError());
+      }, 40);
+      const timeoutTimer = window.setTimeout(() => {
+        finish(reject, new Error('장면 분석 미디어 준비 시간이 초과되었습니다.'));
+      }, timeout);
+      Promise.resolve(promise).then(
+        (value) => finish(resolve, value),
+        (reason) => finish(reject, reason),
+      );
+    });
+  }
+
+  async function analyzeShortformScenes(asset, analysisVersion) {
+    const blob = await shortformAwait(loadBlob(asset.id), analysisVersion, 10000);
+    if (!blob) throw new Error('원본 영상이 없어 장면 분석을 건너뜁니다.');
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const video = document.createElement('video');
+      video.muted = true; video.playsInline = true; video.preload = 'auto'; video.src = objectUrl;
+      await shortformAwait(waitFor(video, 'loadeddata'), analysisVersion, 15000);
+      const duration = Math.max(0.1, Number.isFinite(video.duration) ? video.duration : asset.duration);
+      const interval = Math.max(1.5, duration / 120);
+      const times = [];
+      for (let time = 0; time < duration; time += interval) times.push(Math.min(time, duration - 0.04));
+      if (duration - (times.at(-1) || 0) > interval * 0.4) times.push(Math.max(0, duration - 0.04));
+      const canvas = document.createElement('canvas');
+      canvas.width = 48; canvas.height = 27;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const samples = [];
+      let previousSignature = null;
+      for (let index = 0; index < times.length; index += 1) {
+        if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
+        await shortformAwait(seekVideoFrame(video, times[index]), analysisVersion, 13000);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const signature = frameColorSignature(context, canvas.width, canvas.height);
+        samples.push({ time: times[index], difference: signatureDifference(previousSignature, signature) });
+        previousSignature = signature;
+        if (index % 8 === 0 || index === times.length - 1) {
+          state.shortform.progress = 0.08 + ((index + 1) / times.length) * 0.72;
+          state.shortform.message = `장면 변화 ${index + 1}/${times.length} 프레임 분석 중`;
+          renderInspector();
+          await waitForAnalysisTurn();
+        }
+      }
+      const differences = samples.slice(1).map((sample) => sample.difference);
+      const average = differences.reduce((total, value) => total + value, 0) / Math.max(1, differences.length);
+      const variance = differences.reduce((total, value) => total + (value - average) ** 2, 0) / Math.max(1, differences.length);
+      const threshold = clamp(average + Math.sqrt(variance) * 1.15, 0.085, 0.26);
+      return samples.filter((sample, index) => index > 0
+        && sample.difference >= threshold
+        && sample.difference >= (samples[index - 1]?.difference || 0)
+        && sample.difference >= (samples[index + 1]?.difference || 0))
+        .map((sample) => ({ time: sample.time, strength: clamp(sample.difference / Math.max(0.01, threshold), 0, 2) }));
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  function nearestShortformBoundary(time, boundaries, minimum, maximum, tolerance = 2) {
+    const nearby = boundaries
+      .filter((boundary) => boundary >= minimum && boundary <= maximum && Math.abs(boundary - time) <= tolerance)
+      .sort((first, second) => Math.abs(first - time) - Math.abs(second - time));
+    return nearby[0] ?? clamp(time, minimum, maximum);
+  }
+
+  function generateShortformCandidates(assetId, transcript, sceneCuts, silences, targetDuration) {
+    const coverage = shortformTimelineRanges(assetId);
+    if (!coverage.length) return [];
+    const minimumDuration = Math.max(15, targetDuration - 12);
+    const maximumDuration = Math.min(60, targetDuration + 18);
+    const hookPattern = /[?？]|\d|핵심|방법|이유|결론|중요|비밀|문제|결과|하지만|절대|처음|best|how|why|secret/i;
+    const cueStarts = transcript.cues.map((cue) => cue.start);
+    const sceneTimes = sceneCuts.map((cut) => cut.time);
+    const silenceStarts = silences.map((silence) => silence.start);
+    const silenceEnds = silences.map((silence) => silence.end);
+    const startBoundaries = [...coverage.map((range) => range.start), ...cueStarts, ...sceneTimes, ...silenceEnds];
+    const endBoundaries = [...coverage.map((range) => range.end), ...transcript.cues.map((cue) => cue.end), ...sceneTimes, ...silenceStarts];
+    const starts = [];
+    for (const range of coverage) {
+      starts.push(range.start);
+      for (let time = range.start + targetDuration * 0.72; time < range.end - minimumDuration; time += targetDuration * 0.72) starts.push(time);
+    }
+    transcript.cues.forEach((cue, index) => {
+      const previous = transcript.cues[index - 1];
+      if (!previous || cue.start - previous.end >= 1.1 || hookPattern.test(cue.text)) starts.push(cue.start);
+    });
+    starts.push(...sceneTimes, ...silenceEnds);
+    const uniqueStarts = starts.sort((first, second) => first - second)
+      .filter((time, index, values) => !index || time - values[index - 1] > 0.8);
+    const proposals = uniqueStarts.flatMap((rawStart) => {
+      const range = coverage.find((item) => rawStart >= item.start - 0.02 && rawStart < item.end - 0.02);
+      if (!range) return [];
+      const start = nearestShortformBoundary(rawStart, startBoundaries, range.start, Math.max(range.start, range.end - minimumDuration), 1.8);
+      const minimumEnd = start + minimumDuration;
+      const maximumEnd = Math.min(range.end, start + maximumDuration);
+      if (maximumEnd - minimumEnd < -0.02) return [];
+      const desiredEnd = Math.min(maximumEnd, start + targetDuration);
+      const validEnds = endBoundaries.filter((time) => time >= minimumEnd && time <= maximumEnd);
+      let end = validEnds.sort((first, second) => Math.abs(first - desiredEnd) - Math.abs(second - desiredEnd))[0] || desiredEnd;
+      end = nearestShortformBoundary(end, endBoundaries, minimumEnd, maximumEnd, 2.2);
+      if (end - start < minimumDuration - 0.03) return [];
+      const duration = end - start;
+      const overlappingCues = transcript.cues.filter((cue) => cue.end > start && cue.start < end);
+      const cues = overlappingCues.filter((cue) => cue.start >= start - 0.04
+        && cue.end <= end + 0.04
+        && cue.complete !== false);
+      const speechRanges = mergeTimeRanges(overlappingCues.map((cue) => ({ start: Math.max(start, cue.start), end: Math.min(end, cue.end) })));
+      const speechDuration = speechRanges.reduce((total, rangeItem) => total + rangeItem.end - rangeItem.start, 0);
+      const speechDensity = speechDuration / Math.max(0.1, duration);
+      const openingText = cues.filter((cue) => cue.start < start + 6).map((cue) => cue.text).join(' ');
+      const hookScore = hookPattern.test(openingText) ? 1 : 0;
+      const confidenceValues = cues.map((cue) => Number(cue.confidence)).filter(Number.isFinite);
+      const confidence = confidenceValues.length
+        ? confidenceValues.reduce((total, value) => total + value, 0) / confidenceValues.length
+        : cues.length ? 0.72 : 0.35;
+      const lengthScore = 1 - Math.min(1, Math.abs(duration - targetDuration) / Math.max(1, targetDuration));
+      const startsClean = Math.abs(start - range.start) < 0.2 || cueStarts.some((time) => Math.abs(time - start) < 0.3)
+        || sceneTimes.some((time) => Math.abs(time - start) < 0.8)
+        || silenceEnds.some((time) => Math.abs(time - start) < 0.8);
+      const endsClean = Math.abs(end - range.end) < 0.2 || transcript.cues.some((cue) => Math.abs(cue.end - end) < 0.3)
+        || sceneTimes.some((time) => Math.abs(time - end) < 0.8)
+        || silenceStarts.some((time) => Math.abs(time - end) < 0.8);
+      const boundaryScore = (Number(startsClean) + Number(endsClean)) / 2;
+      const sceneCount = sceneTimes.filter((time) => time > start && time < end).length;
+      const completeSentence = /[.!?。！？]$/.test(cues.at(-1)?.text || '') ? 1 : 0;
+      const score = clamp(Math.round(
+        (cues.length ? speechDensity * 30 + hookScore * 18 + confidence * 10 : 24)
+        + lengthScore * 17 + boundaryScore * 12 + Math.min(1, sceneCount / 3) * 8 + completeSentence * 5
+      ), 0, 100);
+      const firstText = cues.find((cue) => cue.text)?.text.replace(/\s+/g, ' ').trim();
+      const tokens = [...new Set(cues.flatMap((cue) => cue.text.toLowerCase().split(/[^\p{L}\p{N}]+/u))
+        .filter((token) => token.length >= 2))];
+      const title = firstText
+        ? `${firstText.slice(0, 44)}${firstText.length > 44 ? '…' : ''}`
+        : `${formatTime(start)} 장면 하이라이트`;
+      const reasons = [];
+      if (hookScore) reasons.push('훅 문장');
+      if (speechDensity >= 0.55) reasons.push('높은 발화 밀도');
+      if (sceneCount) reasons.push(`장면 전환 ${sceneCount}회`);
+      if (boundaryScore >= 0.5) reasons.push('자연스러운 경계');
+      if (!reasons.length) reasons.push('목표 길이 적합');
+      const signalSource = cues.length ? transcript.source : 'visual';
+      const signalLabel = cues.length ? transcript.label : '장면 중심';
+      return [{
+        id: uid(), start, end, duration, score, title, reasons,
+        signalSource, signalLabel, cues, tokens,
+        sceneCount, speechDensity,
+      }];
+    });
+    const selected = [];
+    for (const candidate of proposals.sort((first, second) => second.score - first.score || first.start - second.start)) {
+      const duplicatesExisting = selected.some((existing) => {
+        const overlap = Math.max(0, Math.min(candidate.end, existing.end) - Math.max(candidate.start, existing.start));
+        const temporalSimilarity = overlap / Math.min(candidate.duration, existing.duration);
+        const firstTokens = new Set(candidate.tokens);
+        const secondTokens = new Set(existing.tokens);
+        const union = new Set([...firstTokens, ...secondTokens]);
+        const sharedTokens = [...firstTokens].filter((token) => secondTokens.has(token)).length;
+        const transcriptSimilarity = union.size ? sharedTokens / union.size : 0;
+        return temporalSimilarity > 0.58 || (candidate.tokens.length >= 4 && transcriptSimilarity > 0.88);
+      });
+      if (!duplicatesExisting) selected.push(candidate);
+      if (selected.length === 6) break;
+    }
+    return selected.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  }
+
+  function renderShortformState(patch) {
+    state.shortform = { ...state.shortform, ...patch };
+    renderInspector();
+  }
+
+  async function analyzeShortformCandidates() {
+    const asset = getShortformAsset();
+    if (state.reframe.analyzing || hasPendingReframe() || state.silence.analyzing || state.sttJob.active) {
+      renderShortformState({ status: 'failed', message: '진행 중이거나 검토 대기 중인 자동 자막, 리프레임 또는 침묵 분석을 먼저 완료하거나 취소하세요.' });
+      return;
+    }
+    if (!asset) {
+      renderShortformState({ status: 'failed', message: '숏폼 후보 생성에는 영상 파일이 필요합니다.' });
+      return;
+    }
+    const coverage = shortformTimelineRanges(asset.id);
+    if (!coverage.length) {
+      renderShortformState({ status: 'failed', message: '선택한 영상이 타임라인에 없습니다.' });
+      return;
+    }
+    const analysisVersion = state.shortform.analysisVersion + 1;
+    renderShortformState({
+      analyzing: true, status: 'analyzing', progress: 0.04, message: `${asset.name}의 발화와 장면을 준비하고 있습니다.`,
+      assetId: asset.id, analysisVersion, candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
+    });
+    const transcript = shortformTranscriptSignals(asset.id);
+    let sceneSourceCuts = [];
+    let sceneWarning = '';
+    try {
+      try {
+        sceneSourceCuts = await analyzeShortformScenes(asset, analysisVersion);
+      } catch (reason) {
+        if (reason?.name === 'AbortError') throw reason;
+        sceneWarning = reason instanceof Error ? reason.message : '장면 분석을 사용할 수 없습니다.';
+      }
+      if (state.shortform.analysisVersion !== analysisVersion) return;
+      state.shortform.progress = 0.84;
+      state.shortform.message = '발화·침묵·장면 신호를 점수화하고 있습니다.';
+      renderInspector();
+      await waitForAnalysisTurn();
+      if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
+      const sceneCuts = mapSourcePointsToTimeline(asset.id, sceneSourceCuts);
+      const silences = shortformSilenceRanges(asset.id);
+      const candidates = generateShortformCandidates(asset.id, transcript, sceneCuts, silences, state.shortform.targetDuration);
+      if (!candidates.length) throw new Error('현재 타임라인에서 목표 길이에 맞는 후보를 만들 수 없습니다. 목표 길이를 줄여보세요.');
+      renderShortformState({
+        analyzing: false, status: 'completed', progress: 1, candidates, selectedId: candidates[0].id, sceneCuts,
+        message: `${candidates.length}개 후보를 만들었습니다. ${transcript.label}${sceneWarning ? ' 기반으로 생성했으며 장면 분석은 생략했습니다.' : '와 장면 변화를 함께 반영했습니다.'}`,
+      });
+      previewShortformCandidate(candidates[0].id, false);
+    } catch (reason) {
+      if (state.shortform.analysisVersion !== analysisVersion || reason?.name === 'AbortError') return;
+      renderShortformState({
+        analyzing: false, status: 'failed', progress: 1, candidates: [], selectedId: '', sceneCuts: [],
+        message: reason instanceof Error ? reason.message : '숏폼 후보를 생성하지 못했습니다.',
+      });
+    }
+  }
+
+  function previewShortformCandidate(candidateId, autoplay = true) {
+    const candidate = state.shortform.candidates.find((item) => item.id === candidateId);
+    if (!candidate) return;
+    stopPlayback();
+    state.shortform.selectedId = candidate.id;
+    state.shortform.previewEnd = candidate.end;
+    seek(candidate.start, true);
+    renderInspector();
+    if (autoplay) document.querySelector(`[data-preview-shortform="${candidate.id}"]`)?.focus({ preventScroll: true });
+    if (!autoplay) return;
+    state.playing = true;
+    state.lastFrameAt = performance.now();
+    syncPreview(true);
+    state.animation = requestAnimationFrame(animate);
+    renderPlayback();
+  }
+
+  function clearShortformCandidates(message = '') {
+    stopPlayback();
+    renderShortformState({
+      analyzing: false, status: 'idle', progress: 0, message, assetId: '', candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
+      analysisVersion: state.shortform.analysisVersion + 1,
+    });
+  }
+
+  function cancelShortformAnalysis() {
+    if (!state.shortform.analyzing) return;
+    clearShortformCandidates('숏폼 후보 분석을 취소했습니다.');
+  }
+
+  function updateShortformTarget(value) {
+    const targetDuration = [15, 30, 45, 60].includes(Number(value)) ? Number(value) : 30;
+    const hadReview = state.shortform.analyzing || state.shortform.candidates.length > 0;
+    stopPlayback();
+    state.shortform = {
+      ...state.shortform, targetDuration, analyzing: false, status: 'idle', progress: 0,
+      message: hadReview ? '목표 길이가 변경되었습니다. 후보를 다시 생성하세요.' : '',
+      assetId: '', candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
+      analysisVersion: state.shortform.analysisVersion + 1,
+    };
+    renderInspector();
+  }
+
+  function applyShortformCandidate() {
+    if (state.sttJob.active) {
+      renderShortformState({ message: '진행 중인 자동 자막 작업을 먼저 완료하거나 취소하세요.' });
+      return;
+    }
+    const candidate = state.shortform.candidates.find((item) => item.id === state.shortform.selectedId);
+    if (!candidate) {
+      renderShortformState({ message: '적용할 숏폼 후보를 선택하세요.' });
+      return;
+    }
+    const { start, end } = candidate;
+    stopPlayback();
+    state.shortform.applying = true;
+    try {
+      commit((project) => {
+        project.canvas = { ...project.canvas, ratio: '9:16', ...ratios['9:16'] };
+        project.clips = project.clips.flatMap((clip) => {
+          const clipStart = clip.timelineStart;
+          const clipEnd = clip.timelineStart + clip.sourceEnd - clip.sourceStart;
+          const keptStart = Math.max(start, clipStart);
+          const keptEnd = Math.min(end, clipEnd);
+          if (keptEnd - keptStart <= 0.03) return [];
+          return [{
+            ...clip,
+            timelineStart: keptStart - start,
+            sourceStart: clip.sourceStart + keptStart - clipStart,
+            sourceEnd: clip.sourceStart + keptEnd - clipStart,
+          }];
+        });
+        project.texts = project.texts.flatMap((text) => {
+          if (candidate.signalSource === 'stt' && text.role === 'caption') return [];
+          const keptStart = Math.max(start, text.start);
+          const keptEnd = Math.min(end, text.end);
+          if (keptEnd - keptStart <= 0.03) return [];
+          return [{ ...text, start: keptStart - start, end: keptEnd - start }];
+        });
+        if (candidate.signalSource === 'stt') {
+          const generatedCaptions = candidate.cues.flatMap((cue) => {
+            const keptStart = Math.max(start, cue.start);
+            const keptEnd = Math.min(end, cue.end);
+            if (keptEnd - keptStart <= 0.03) return [];
+            return [captionFromCue({
+              ...cue, source: 'shortform-stt', start: keptStart - start, end: keptEnd - start,
+            })];
+          });
+          project.texts.push(...generatedCaptions);
+        }
+        return project;
+      });
+    } finally {
+      state.shortform.applying = false;
+    }
+    if (candidate.signalSource === 'stt') {
+      clearTimeout(state.sttPollTimer);
+      state.sttPollTimer = 0;
+      state.sttProposal = null;
+      state.sttJob = { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false };
+    }
+    state.playhead = 0;
+    state.selection = null;
+    state.shortform = {
+      ...state.shortform, applying: false, analyzing: false, status: 'applied', progress: 1,
+      message: `후보 #${candidate.rank}을 ${candidate.duration.toFixed(1)}초 숏폼 타임라인으로 적용했습니다. Undo로 복원할 수 있습니다.`,
+      candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
+    };
+    renderAll();
+  }
+
+  function renderShortformSection(asset) {
+    const review = state.shortform;
+    const selected = review.candidates.find((candidate) => candidate.id === review.selectedId);
+    const targetOptions = [15, 30, 45, 60].map((duration) => `<option value="${duration}" ${review.targetDuration === duration ? 'selected' : ''}>${duration}초${duration === 30 ? ' · 추천' : ''}</option>`).join('');
+    const cards = review.candidates.map((candidate) => `<article class="shortform-candidate ${candidate.id === review.selectedId ? 'selected' : ''}"><button type="button" data-preview-shortform="${candidate.id}" aria-pressed="${candidate.id === review.selectedId}"><span class="shortform-rank">#${candidate.rank}</span><span class="shortform-score">${candidate.score}점</span><strong>${escapeHtml(candidate.title)}</strong><time>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)} · ${candidate.duration.toFixed(1)}초</time><small>${candidate.reasons.map((reason) => `<em>${escapeHtml(reason)}</em>`).join('')}</small></button></article>`).join('');
+    return `<section class="property-section shortform-section"><div class="ai-title"><span>◆</span><div><h3>숏폼 후보 생성</h3><small>${asset ? escapeHtml(asset.name) : '타임라인 영상 필요'}</small></div></div><label class="field"><span>목표 길이 <b>${review.targetDuration}초</b></span><select data-shortform-target ${review.analyzing ? 'disabled' : ''}>${targetOptions}</select></label><button id="analyzeShortformButton" class="shortform-analyze" ${!asset || review.analyzing || review.candidates.length || state.sttJob.active || state.silence.analyzing || hasPendingReframe() ? 'disabled' : ''}>${review.analyzing ? '하이라이트 분석 중…' : review.candidates.length ? '후보 검토 중' : '자동 후보 생성'} <span>${review.targetDuration}s</span></button>${review.analyzing ? `<div class="shortform-status"><div role="status" aria-live="polite"><span>${escapeHtml(review.message)}</span><b>${Math.round(review.progress * 100)}%</b></div><progress value="${review.progress}" max="1" aria-label="숏폼 후보 분석 진행률"></progress><button id="cancelShortformButton" class="danger-action">분석 취소</button></div>` : review.message ? `<p class="shortform-message ${review.status === 'failed' ? 'error' : ''}" role="status" aria-live="polite">${escapeHtml(review.message)}</p>` : ''}${review.candidates.length ? `<div class="shortform-review"><div class="shortform-review-head"><strong>추천 후보 ${review.candidates.length}개</strong><span>${escapeHtml(review.candidates[0].signalLabel)}</span></div><p class="shortform-help">점수와 근거를 확인하고 후보를 눌러 해당 구간을 미리보세요.</p><div class="shortform-list">${cards}</div><div class="proposal-actions"><button id="clearShortformButton">다시 생성</button><button id="applyShortformButton" class="apply" ${selected ? '' : 'disabled'}>선택 후보 적용</button></div></div>` : ''}</section>`;
   }
 
   function renderInspector() {
@@ -453,6 +965,9 @@
     const text = state.selection?.kind === 'text' ? state.project.texts.find((item) => item.id === state.selection.id) : null;
     const sttAsset = getTranscribableAsset();
     const sttProposal = state.sttProposal;
+    const shortformAsset = state.shortform.analyzing || state.shortform.candidates.length
+      ? state.project.assets.find((item) => item.id === state.shortform.assetId)
+      : getShortformAsset();
     const reframe = state.reframe;
     const reframeHasBoundAsset = reframe.analyzing || reframe.keyframes.length > 0;
     const reframeAsset = reframeHasBoundAsset
@@ -483,9 +998,10 @@
       ${text ? `<section class="property-section"><div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
-      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</section>
-      <section class="property-section reframe-section"><div class="ai-title"><span>▣</span><div><h3>세로 자동 리프레임</h3><small>${reframeAsset ? `${reframeHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(reframeAsset.name)}` : reframeHasBoundAsset ? '분석 대상이 삭제됨' : '가로 영상 필요'}</small></div></div><label class="field"><span>프레임 샘플 간격</span><select data-reframe-setting="sampleInterval" ${reframe.analyzing ? 'disabled' : ''}><option value="0.5" ${reframe.sampleInterval === 0.5 ? 'selected' : ''}>0.5초 · 정밀</option><option value="1" ${reframe.sampleInterval === 1 ? 'selected' : ''}>1초 · 균형</option><option value="2" ${reframe.sampleInterval === 2 ? 'selected' : ''}>2초 · 빠름</option></select></label><button id="analyzeReframeButton" ${!reframeAsset || reframe.analyzing || reframe.keyframes.length ? 'disabled' : ''}>${reframe.analyzing ? '피사체 추적 중…' : reframe.keyframes.length ? '키프레임 검토 중' : '세로 구도 분석'} <span>9:16</span></button>${appliedReframeCount && !reframe.keyframes.length ? `<button id="removeReframeButton" class="reframe-remove" data-reframe-asset="${reframeAsset.id}">적용된 리프레임 해제 <span>${appliedReframeCount}개</span></button>` : ''}${reframe.analyzing ? `<div class="reframe-status"><div><span>${escapeHtml(reframe.message)}</span><b>${Math.round(reframe.progress * 100)}%</b></div><progress value="${reframe.progress}" max="1"></progress><button id="cancelReframeButton" class="danger-action">분석 취소</button></div>` : reframe.message ? `<p class="reframe-message ${reframe.status === 'failed' ? 'error' : ''}">${escapeHtml(reframe.message)}</p>` : ''}${reframe.keyframes.length ? `<div class="reframe-review"><div class="reframe-review-head"><strong>포커스 키프레임 ${reframe.keyframes.length}개</strong><span>${reframeMethodLabel}</span></div><p class="reframe-help">시간을 눌러 구도를 확인하고 가로 위치를 직접 보정할 수 있습니다.</p><div class="reframe-keyframes">${reframe.keyframes.map((keyframe, index) => `<div class="reframe-keyframe"><button type="button" data-preview-reframe="${index}">${formatTime(keyframe.time, true)}</button><label><span>가로 ${Math.round(keyframe.x * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(keyframe.x * 100)}" data-reframe-keyframe="${index}" data-reframe-axis="x"></label><em>${Math.round(keyframe.confidence * 100)}%</em></div>`).join('')}</div><div class="proposal-actions"><button id="clearReframeButton">취소</button><button id="applyReframeButton" class="apply">9:16에 적용</button></div></div>` : ''}</section>
-      <section class="property-section silence-section"><div class="ai-title"><span>∿</span><div><h3>침묵 구간 감지</h3><small>${silenceAsset ? `${silenceHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(silenceAsset.name)}` : silenceHasBoundAsset ? '분석 대상이 삭제됨' : '영상 또는 오디오 필요'}</small></div></div><div class="field-grid silence-settings"><label class="field"><span>임계값 dB</span><input data-silence-field="thresholdDb" type="number" min="-80" max="-5" step="1" value="${silence.thresholdDb}" ${silence.analyzing ? 'disabled' : ''}></label><label class="field"><span>최소 길이 초</span><input data-silence-field="minimumDuration" type="number" min="0.1" max="10" step="0.1" value="${silence.minimumDuration}" ${silence.analyzing ? 'disabled' : ''}></label></div><label class="field"><span>음성 여백 초 <b>${silence.padding.toFixed(2)}</b></span><input data-silence-field="padding" type="range" min="0" max="1" step="0.01" value="${silence.padding}" ${silence.analyzing ? 'disabled' : ''}></label><button id="analyzeSilenceButton" class="silence-analyze" ${!sttAsset || silence.analyzing || silence.candidates.length ? 'disabled' : ''}>${silence.analyzing ? '오디오 분석 중…' : silence.candidates.length ? '후보 검토 중' : '침묵 구간 분석'} <span>${silence.thresholdDb} dB</span></button>${silence.analyzing ? `<div class="silence-status"><div><span>${escapeHtml(silence.message)}</span><b>${Math.round(silence.progress * 100)}%</b></div><progress value="${silence.progress}" max="1"></progress></div>` : silence.message ? `<p class="silence-message ${silence.status === 'failed' ? 'error' : ''}">${escapeHtml(silence.message)}</p>` : ''}${silence.candidates.length ? `<div class="silence-review"><div class="silence-review-head"><strong>삭제 후보 ${silence.candidates.length}개</strong><span>${selectedSilences.length}개 선택</span></div><div class="silence-list">${silence.candidates.map((candidate, index) => { const occurrences = candidateTimelineRemovals[index]; const occurrenceDuration = occurrences.reduce((total, range) => total + range.end - range.start, 0); return `<div class="silence-candidate"><label><input type="checkbox" data-silence-candidate="${index}" ${candidate.selected ? 'checked' : ''} ${occurrences.length ? '' : 'disabled'}><span><strong>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)}</strong><small>${occurrences.length ? `타임라인 ${occurrences.length}곳 · 실제 ${occurrenceDuration.toFixed(2)}초` : '현재 타임라인에 적용 구간 없음'}</small></span></label><div class="silence-occurrences">${occurrences.map((range, occurrenceIndex) => `<button type="button" data-preview-silence="${index}" data-preview-occurrence="${occurrenceIndex}" title="${formatTime(range.start, true)}–${formatTime(range.end, true)}로 이동">${occurrenceIndex + 1}</button>`).join('')}</div></div>`; }).join('')}</div><div class="silence-total"><span>타임라인 ${selectedTimelineRemovals.length}개 구간</span><strong>${selectedSilenceDuration.toFixed(2)}초</strong></div><div class="proposal-actions"><button id="clearSilenceButton">취소</button><button id="applySilenceButton" class="apply" ${selectedTimelineRemovals.length && silenceAsset ? '' : 'disabled'}>리플 삭제 적용</button></div></div>` : ''}</section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
+      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</section>
+      ${renderShortformSection(shortformAsset)}
+      <section class="property-section reframe-section"><div class="ai-title"><span>▣</span><div><h3>세로 자동 리프레임</h3><small>${reframeAsset ? `${reframeHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(reframeAsset.name)}` : reframeHasBoundAsset ? '분석 대상이 삭제됨' : '가로 영상 필요'}</small></div></div><label class="field"><span>프레임 샘플 간격</span><select data-reframe-setting="sampleInterval" ${reframe.analyzing ? 'disabled' : ''}><option value="0.5" ${reframe.sampleInterval === 0.5 ? 'selected' : ''}>0.5초 · 정밀</option><option value="1" ${reframe.sampleInterval === 1 ? 'selected' : ''}>1초 · 균형</option><option value="2" ${reframe.sampleInterval === 2 ? 'selected' : ''}>2초 · 빠름</option></select></label><button id="analyzeReframeButton" ${!reframeAsset || reframe.analyzing || reframe.keyframes.length || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>${reframe.analyzing ? '피사체 추적 중…' : reframe.keyframes.length ? '키프레임 검토 중' : '세로 구도 분석'} <span>9:16</span></button>${appliedReframeCount && !reframe.keyframes.length ? `<button id="removeReframeButton" class="reframe-remove" data-reframe-asset="${reframeAsset.id}">적용된 리프레임 해제 <span>${appliedReframeCount}개</span></button>` : ''}${reframe.analyzing ? `<div class="reframe-status"><div><span>${escapeHtml(reframe.message)}</span><b>${Math.round(reframe.progress * 100)}%</b></div><progress value="${reframe.progress}" max="1"></progress><button id="cancelReframeButton" class="danger-action">분석 취소</button></div>` : reframe.message ? `<p class="reframe-message ${reframe.status === 'failed' ? 'error' : ''}">${escapeHtml(reframe.message)}</p>` : ''}${reframe.keyframes.length ? `<div class="reframe-review"><div class="reframe-review-head"><strong>포커스 키프레임 ${reframe.keyframes.length}개</strong><span>${reframeMethodLabel}</span></div><p class="reframe-help">시간을 눌러 구도를 확인하고 가로 위치를 직접 보정할 수 있습니다.</p><div class="reframe-keyframes">${reframe.keyframes.map((keyframe, index) => `<div class="reframe-keyframe"><button type="button" data-preview-reframe="${index}">${formatTime(keyframe.time, true)}</button><label><span>가로 ${Math.round(keyframe.x * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(keyframe.x * 100)}" data-reframe-keyframe="${index}" data-reframe-axis="x"></label><em>${Math.round(keyframe.confidence * 100)}%</em></div>`).join('')}</div><div class="proposal-actions"><button id="clearReframeButton">취소</button><button id="applyReframeButton" class="apply">9:16에 적용</button></div></div>` : ''}</section>
+      <section class="property-section silence-section"><div class="ai-title"><span>∿</span><div><h3>침묵 구간 감지</h3><small>${silenceAsset ? `${silenceHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(silenceAsset.name)}` : silenceHasBoundAsset ? '분석 대상이 삭제됨' : '영상 또는 오디오 필요'}</small></div></div><div class="field-grid silence-settings"><label class="field"><span>임계값 dB</span><input data-silence-field="thresholdDb" type="number" min="-80" max="-5" step="1" value="${silence.thresholdDb}" ${silence.analyzing ? 'disabled' : ''}></label><label class="field"><span>최소 길이 초</span><input data-silence-field="minimumDuration" type="number" min="0.1" max="10" step="0.1" value="${silence.minimumDuration}" ${silence.analyzing ? 'disabled' : ''}></label></div><label class="field"><span>음성 여백 초 <b>${silence.padding.toFixed(2)}</b></span><input data-silence-field="padding" type="range" min="0" max="1" step="0.01" value="${silence.padding}" ${silence.analyzing ? 'disabled' : ''}></label><button id="analyzeSilenceButton" class="silence-analyze" ${!sttAsset || silence.analyzing || silence.candidates.length || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>${silence.analyzing ? '오디오 분석 중…' : silence.candidates.length ? '후보 검토 중' : '침묵 구간 분석'} <span>${silence.thresholdDb} dB</span></button>${silence.analyzing ? `<div class="silence-status"><div><span>${escapeHtml(silence.message)}</span><b>${Math.round(silence.progress * 100)}%</b></div><progress value="${silence.progress}" max="1"></progress></div>` : silence.message ? `<p class="silence-message ${silence.status === 'failed' ? 'error' : ''}">${escapeHtml(silence.message)}</p>` : ''}${silence.candidates.length ? `<div class="silence-review"><div class="silence-review-head"><strong>삭제 후보 ${silence.candidates.length}개</strong><span>${selectedSilences.length}개 선택</span></div><div class="silence-list">${silence.candidates.map((candidate, index) => { const occurrences = candidateTimelineRemovals[index]; const occurrenceDuration = occurrences.reduce((total, range) => total + range.end - range.start, 0); return `<div class="silence-candidate"><label><input type="checkbox" data-silence-candidate="${index}" ${candidate.selected ? 'checked' : ''} ${occurrences.length ? '' : 'disabled'}><span><strong>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)}</strong><small>${occurrences.length ? `타임라인 ${occurrences.length}곳 · 실제 ${occurrenceDuration.toFixed(2)}초` : '현재 타임라인에 적용 구간 없음'}</small></span></label><div class="silence-occurrences">${occurrences.map((range, occurrenceIndex) => `<button type="button" data-preview-silence="${index}" data-preview-occurrence="${occurrenceIndex}" title="${formatTime(range.start, true)}–${formatTime(range.end, true)}로 이동">${occurrenceIndex + 1}</button>`).join('')}</div></div>`; }).join('')}</div><div class="silence-total"><span>타임라인 ${selectedTimelineRemovals.length}개 구간</span><strong>${selectedSilenceDuration.toFixed(2)}초</strong></div><div class="proposal-actions"><button id="clearSilenceButton">취소</button><button id="applySilenceButton" class="apply" ${selectedTimelineRemovals.length && silenceAsset ? '' : 'disabled'}>리플 삭제 적용</button></div></div>` : ''}</section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
   }
 
   function renderTimeline() {
@@ -820,6 +1336,10 @@
 
   async function analyzeReframe() {
     const asset = getReframeAsset();
+    if (state.shortform.analyzing || state.shortform.candidates.length) {
+      renderReframeState({ status: 'failed', message: '숏폼 후보 분석 또는 검토를 먼저 완료하거나 취소하세요.' });
+      return;
+    }
     if (!asset) {
       renderReframeState({ status: 'failed', message: '자동 리프레임에는 영상 파일이 필요합니다.' });
       return;
@@ -1033,6 +1553,10 @@
 
   async function startAutoCaption() {
     const asset = getTranscribableAsset();
+    if (state.shortform.analyzing || state.shortform.candidates.length) {
+      renderSttState({ message: '숏폼 후보 검토를 먼저 적용하거나 취소하세요.' });
+      return;
+    }
     if (!asset) {
       renderSttState({ message: '먼저 영상 또는 오디오 파일을 추가하세요.' });
       return;
@@ -1158,7 +1682,13 @@
   }
 
   function dismissSttProposal() {
+    const proposalAssetId = state.sttProposal?.assetId;
+    const invalidatesShortform = proposalAssetId === state.shortform.assetId
+      && (state.shortform.analyzing || state.shortform.candidates.some((candidate) => candidate.signalSource === 'stt'));
     state.sttProposal = null;
+    if (invalidatesShortform) {
+      clearShortformCandidates('원본 STT 제안이 취소되어 숏폼 후보도 초기화했습니다.');
+    }
     renderSttState({ active: false, status: 'idle', progress: 0, message: 'AI 자막 제안을 적용하지 않았습니다.', id: '' });
   }
 
@@ -1244,6 +1774,10 @@
 
   async function analyzeSilence() {
     const asset = getTranscribableAsset();
+    if (state.shortform.analyzing || state.shortform.candidates.length) {
+      renderSilenceState({ status: 'failed', message: '숏폼 후보 분석 또는 검토를 먼저 완료하거나 취소하세요.' });
+      return;
+    }
     if (!asset) {
       renderSilenceState({ status: 'failed', message: '먼저 영상 또는 오디오 파일을 추가하세요.' });
       return;
@@ -1376,6 +1910,9 @@
   }
 
   function clearSilenceCandidates() {
+    if (state.shortform.analyzing || state.shortform.candidates.length) {
+      invalidateShortformReview('침묵 후보가 변경되어 숏폼 후보를 다시 생성해야 합니다.');
+    }
     renderSilenceState({
       analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', candidates: [],
       analysisVersion: state.silence.analysisVersion + 1,
@@ -1439,6 +1976,9 @@
     const [minimum, maximum] = limits[field] || [0, 1];
     const numericValue = clamp(Number(value), minimum, maximum);
     if (!Number.isFinite(numericValue)) return;
+    if (state.shortform.analyzing || state.shortform.candidates.length) {
+      invalidateShortformReview('침묵 분석 설정이 변경되어 숏폼 후보를 다시 생성해야 합니다.');
+    }
     const hadReview = state.silence.analyzing || state.silence.candidates.length > 0;
     state.silence = {
       ...state.silence, [field]: numericValue, analyzing: false, status: 'idle', progress: 0, assetId: '', candidates: [],
@@ -1765,7 +2305,8 @@
 
     document.getElementById('inspectorContent').onchange=(event)=>{
       const target = event.target;
-      if (target.dataset.reframeSetting) updateReframeSetting(target.value);
+      if (target.dataset.shortformTarget !== undefined) updateShortformTarget(target.value);
+      else if (target.dataset.reframeSetting) updateReframeSetting(target.value);
       else if (target.dataset.reframeKeyframe !== undefined) {
         updateReframeKeyframe(Number(target.dataset.reframeKeyframe), target.dataset.reframeAxis, target.value, true);
         renderInspector();
@@ -1781,7 +2322,32 @@
         if (label) label.textContent = `가로 ${Math.round(Number(target.value))}%`;
       } else if(target.type==='range'||target.type==='color') handleInspectorChange(target);
     };
-    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.dataset.previewReframe !== undefined)previewReframeKeyframe(Number(target.dataset.previewReframe));else if(target.dataset.previewSilence !== undefined)previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));else if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();else if(target.id==='analyzeReframeButton')void analyzeReframe();else if(target.id==='cancelReframeButton')cancelReframeAnalysis();else if(target.id==='applyReframeButton')applyReframeProposal();else if(target.id==='clearReframeButton')clearReframeProposal();else if(target.id==='removeReframeButton')removeAppliedReframe(target.dataset.reframeAsset);else if(target.id==='analyzeSilenceButton')void analyzeSilence();else if(target.id==='applySilenceButton')applySilenceRemoval();else if(target.id==='clearSilenceButton')clearSilenceCandidates();};
+    document.getElementById('inspectorContent').onclick = (event) => {
+      const target = event.target.closest('button');
+      if (!target) return;
+      if (target.dataset.previewShortform !== undefined) previewShortformCandidate(target.dataset.previewShortform);
+      else if (target.dataset.previewReframe !== undefined) previewReframeKeyframe(Number(target.dataset.previewReframe));
+      else if (target.dataset.previewSilence !== undefined) previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));
+      else if (target.id === 'jsonExport') downloadJson();
+      else if (target.id === 'importCaptionsButton') document.getElementById('captionInput').click();
+      else if (target.id === 'exportCaptionsButton') exportCaptions();
+      else if (target.id === 'autoCaptionButton') void startAutoCaption();
+      else if (target.id === 'cancelSttButton') void cancelAutoCaption();
+      else if (target.id === 'applySttButton') applySttProposal();
+      else if (target.id === 'dismissSttButton') dismissSttProposal();
+      else if (target.id === 'analyzeShortformButton') void analyzeShortformCandidates();
+      else if (target.id === 'cancelShortformButton') cancelShortformAnalysis();
+      else if (target.id === 'clearShortformButton') clearShortformCandidates('후보를 다시 생성할 수 있습니다.');
+      else if (target.id === 'applyShortformButton') applyShortformCandidate();
+      else if (target.id === 'analyzeReframeButton') void analyzeReframe();
+      else if (target.id === 'cancelReframeButton') cancelReframeAnalysis();
+      else if (target.id === 'applyReframeButton') applyReframeProposal();
+      else if (target.id === 'clearReframeButton') clearReframeProposal();
+      else if (target.id === 'removeReframeButton') removeAppliedReframe(target.dataset.reframeAsset);
+      else if (target.id === 'analyzeSilenceButton') void analyzeSilence();
+      else if (target.id === 'applySilenceButton') applySilenceRemoval();
+      else if (target.id === 'clearSilenceButton') clearSilenceCandidates();
+    };
     const modalRoot = document.getElementById('modalRoot');
     modalRoot.onchange = (event) => {
       if (event.target.name !== 'exportFormat' || state.exportProgress.active) return;
@@ -1808,6 +2374,10 @@
   function handleInspectorChange(target) {
     const field = target.dataset.field;
     if (!field) return;
+    const invalidatesShortform = [
+      'clip-timelineStart', 'clip-sourceStart', 'clip-sourceEnd',
+      'text-start', 'text-end', 'text-text',
+    ].includes(field);
     if (field === 'canvas-ratio') {
       commit((project) => ({ ...project, canvas: { ...project.canvas, ratio: target.value, ...ratios[target.value] } }));
       return;
@@ -1843,10 +2413,12 @@
       text.y = clamp(text.y, 0, 100);
     }
     state.project = recalculate(project);
+    if (invalidatesShortform) invalidateShortformReview('클립 또는 자막이 변경되었습니다. 숏폼 후보를 다시 생성하세요.');
     scheduleSave();
     renderToolbar();
     renderTimeline();
     syncPreview();
+    if (invalidatesShortform) renderInspector();
   }
 
   async function hydrate() {
