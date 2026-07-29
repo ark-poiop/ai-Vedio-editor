@@ -38,7 +38,7 @@
     past: [], future: [], saveStatus: 'loading', exportOpen: false,
     exportProgress: { active: false, progress: 0, status: '' },
     previewVisual: null, previewAudio: null, activeVisualId: '', activeAudioId: '',
-    animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '',
+    animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
   };
 
   function recalculate(project) {
@@ -197,6 +197,7 @@
           <aside class="media-library panel">
             <div class="panel-heading"><div><span class="eyebrow">LIBRARY</span><h2>미디어</h2></div><span id="assetCount" class="count-badge">0</span></div>
             <input id="fileInput" type="file" multiple accept="video/*,audio/*,image/*" hidden>
+            <input id="captionInput" type="file" accept=".srt,.vtt,application/x-subrip,text/vtt" hidden>
             <div id="dropZone" class="drop-zone"><div class="upload-icon">＋</div><strong>미디어 추가</strong><span>파일을 끌어 놓거나 선택하세요</span><button id="pickFiles" class="button subtle" type="button">파일 선택</button></div>
             <p id="mediaError" class="inline-error" hidden></p><div id="assetList" class="asset-list"></div>
           </aside>
@@ -340,9 +341,10 @@
     root.innerHTML = `
       <section class="property-section"><h3>캔버스</h3><label class="field"><span>화면 비율</span><select data-field="canvas-ratio"><option value="9:16" ${state.project.canvas.ratio === '9:16' ? 'selected' : ''}>9:16 · Shorts</option><option value="1:1" ${state.project.canvas.ratio === '1:1' ? 'selected' : ''}>1:1 · Square</option><option value="16:9" ${state.project.canvas.ratio === '16:9' ? 'selected' : ''}>16:9 · Landscape</option></select></label><div class="ratio-meta"><span>${state.project.canvas.width} × ${state.project.canvas.height}</span><em>30 FPS</em></div></section>
       ${clip ? `<section class="property-section"><div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label></section>` : ''}
-      ${text ? `<section class="property-section"><div class="section-title"><h3>텍스트</h3><span class="type-pill text">T</span></div><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></section>` : ''}
+      ${text ? `<section class="property-section"><div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
-      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 도구</h3><small>다음 개발 단계</small></div></div><button disabled>자동 자막 생성 <span>준비 중</span></button><button disabled>침묵 구간 감지 <span>준비 중</span></button><button disabled>세로 자동 리프레임 <span>준비 중</span></button></section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
+      <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
+      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 도구</h3><small>다음 개발 단계</small></div></div><button disabled>자동 자막 생성 <span>STT 연결 예정</span></button><button disabled>침묵 구간 감지 <span>준비 중</span></button><button disabled>세로 자동 리프레임 <span>준비 중</span></button></section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
   }
 
   function renderTimeline() {
@@ -355,9 +357,9 @@
       const duration = clip.sourceEnd - clip.sourceStart;
       return `<div class="timeline-clip ${track} ${state.selection?.kind === 'clip' && state.selection.id === clip.id ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
     }).join('');
-    const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${state.selection?.kind === 'text' && state.selection.id === text.id ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>T</b>${escapeHtml(text.text)}</span></div>`).join('');
+    const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${state.selection?.kind === 'text' && state.selection.id === text.id ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
     document.getElementById('timelineContent').style.width = `${width + LABEL_WIDTH}px`;
-    document.getElementById('timelineContent').innerHTML = `<div class="timeline-label-spacer">TIME</div><div class="timeline-ruler" style="margin-left:${LABEL_WIDTH}px;width:${width}px">${ruler}</div><div class="playhead" style="left:${LABEL_WIDTH + state.playhead * state.zoom}px"><i></i><span></span></div><div class="track-row"><div class="track-label"><b>V1</b><span>영상</span></div><div class="track-lane" style="width:${width}px">${clips('video')}</div></div><div class="track-row text-track"><div class="track-label"><b>T1</b><span>텍스트</span></div><div class="track-lane" style="width:${width}px">${texts}</div></div><div class="track-row"><div class="track-label"><b>A1</b><span>오디오</span></div><div class="track-lane" style="width:${width}px">${clips('audio')}</div></div>`;
+    document.getElementById('timelineContent').innerHTML = `<div class="timeline-label-spacer">TIME</div><div class="timeline-ruler" style="margin-left:${LABEL_WIDTH}px;width:${width}px">${ruler}</div><div class="playhead" style="left:${LABEL_WIDTH + state.playhead * state.zoom}px"><i></i><span></span></div><div class="track-row"><div class="track-label"><b>V1</b><span>영상</span></div><div class="track-lane" style="width:${width}px">${clips('video')}</div></div><div class="track-row text-track"><div class="track-label"><b>T1</b><span>텍스트·자막</span></div><div class="track-lane" style="width:${width}px">${texts}</div></div><div class="track-row"><div class="track-label"><b>A1</b><span>오디오</span></div><div class="track-lane" style="width:${width}px">${clips('audio')}</div></div>`;
     document.getElementById('elementCount').textContent = `${state.project.clips.length + state.project.texts.length}개 요소`;
     document.getElementById('zoomInput').value = state.zoom;
   }
@@ -425,9 +427,86 @@
     state.selection = null;
   }
 
+  function parseSubtitleTime(value) {
+    const parts = value.trim().replace(',', '.').split(':').map(Number);
+    if (parts.some((part) => !Number.isFinite(part)) || (parts.length !== 2 && parts.length !== 3)) {
+      throw new Error(`잘못된 자막 시간 형식입니다: ${value}`);
+    }
+    const [hours, minutes, seconds] = parts.length === 3 ? parts : [0, parts[0], parts[1]];
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  function parseSubtitleFile(source) {
+    const normalized = source.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
+    if (!normalized) return [];
+    return normalized.split(/\n{2,}/).flatMap((block) => {
+      const lines = block.split('\n').map((line) => line.trimEnd());
+      const timingIndex = lines.findIndex((line) => line.includes('-->'));
+      if (timingIndex < 0) return [];
+      const timing = lines[timingIndex].match(/^\s*((?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3})\s*-->\s*((?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3})/);
+      if (!timing) return [];
+      const text = lines.slice(timingIndex + 1).join('\n').replace(/<[^>]+>/g, '').trim();
+      if (!text) return [];
+      const start = parseSubtitleTime(timing[1]);
+      const end = parseSubtitleTime(timing[2]);
+      return end > start ? [{ start, end, text }] : [];
+    });
+  }
+
+  function captionFromCue(cue) {
+    return {
+      id: uid(), role: 'caption', text: cue.text, start: cue.start, end: cue.end,
+      x: 50, y: 82, fontSize: 58, fontWeight: 800,
+      color: '#ffffff', background: '#000000bb', align: 'center',
+    };
+  }
+
+  async function importCaptions(file) {
+    try {
+      const cues = parseSubtitleFile(await file.text());
+      if (!cues.length) throw new Error('유효한 자막 구간을 찾지 못했습니다. SRT 또는 VTT 형식을 확인하세요.');
+      const captions = cues.map(captionFromCue);
+      commit((project) => {
+        project.texts.push(...captions);
+        return project;
+      });
+      state.selection = { kind: 'text', id: captions[0].id };
+      state.playhead = captions[0].start;
+      state.captionMessage = `${file.name}에서 자막 ${captions.length}개를 가져왔습니다.`;
+      renderAll();
+    } catch (reason) {
+      state.captionMessage = reason instanceof Error ? reason.message : '자막 파일을 가져오지 못했습니다.';
+      renderInspector();
+    }
+  }
+
+  function formatSrtTime(seconds) {
+    const totalMilliseconds = Math.max(0, Math.round(seconds * 1000));
+    const hours = Math.floor(totalMilliseconds / 3600000);
+    const minutes = Math.floor((totalMilliseconds % 3600000) / 60000);
+    const wholeSeconds = Math.floor((totalMilliseconds % 60000) / 1000);
+    const milliseconds = totalMilliseconds % 1000;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(wholeSeconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+  }
+
+  function exportCaptions() {
+    const captions = state.project.texts
+      .filter((text) => text.role === 'caption')
+      .sort((first, second) => first.start - second.start);
+    if (!captions.length) {
+      state.captionMessage = '내보낼 자막이 없습니다.';
+      renderInspector();
+      return;
+    }
+    const srt = captions.map((caption, index) => `${index + 1}\n${formatSrtTime(caption.start)} --> ${formatSrtTime(caption.end)}\n${caption.text}`).join('\n\n');
+    downloadBlob(new Blob([`\uFEFF${srt}\n`], { type: 'application/x-subrip;charset=utf-8' }), `${safeName(state.project.title)}.srt`);
+    state.captionMessage = `자막 ${captions.length}개를 SRT로 저장했습니다.`;
+    renderInspector();
+  }
+
   function addText() {
     const id = uid();
-    commit((project) => { project.texts.push({ id, text: '텍스트를 입력하세요', start: state.playhead, end: Math.min(project.duration, state.playhead + 4), x: 50, y: 76, fontSize: 56, fontWeight: 800, color: '#ffffff', background: '#00000099', align: 'center' }); return project; });
+    commit((project) => { project.texts.push({ id, role: 'text', text: '텍스트를 입력하세요', start: state.playhead, end: Math.min(project.duration, state.playhead + 4), x: 50, y: 76, fontSize: 56, fontWeight: 800, color: '#ffffff', background: '#00000099', align: 'center' }); return project; });
     state.selection = { kind: 'text', id }; renderAll();
   }
 
@@ -566,6 +645,7 @@
   function bindEvents() {
     document.getElementById('pickFiles').onclick = () => document.getElementById('fileInput').click();
     document.getElementById('fileInput').onchange = (event) => { void addFiles([...event.target.files]); event.target.value=''; };
+    document.getElementById('captionInput').onchange = (event) => { const [file] = event.target.files; if (file) void importCaptions(file); event.target.value=''; };
     const drop = document.getElementById('dropZone');
     drop.ondragover=(event)=>{event.preventDefault();drop.classList.add('is-dragging');}; drop.ondragleave=()=>drop.classList.remove('is-dragging');
     drop.ondrop=(event)=>{event.preventDefault();drop.classList.remove('is-dragging');void addFiles([...event.dataTransfer.files]);};
@@ -588,17 +668,54 @@
 
     document.getElementById('inspectorContent').onchange=(event)=>handleInspectorChange(event.target);
     document.getElementById('inspectorContent').oninput=(event)=>{if(event.target.type==='range'||event.target.type==='color')handleInspectorChange(event.target);};
-    document.getElementById('inspectorContent').onclick=(event)=>{if(event.target.id==='jsonExport')downloadJson();};
+    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();};
     document.getElementById('modalRoot').onclick=async(event)=>{if(event.target.id==='closeModal'){state.exportOpen=false;renderModal();}if(event.target.id==='startExport'){const quality=document.getElementById('exportQuality').value;state.playing=false;syncPreview();try{const blob=await exportVideo(quality);downloadBlob(blob,`${safeName(state.project.title)}.webm`);state.exportProgress={active:false,progress:1,status:'완료'};state.exportOpen=false;renderModal();}catch(reason){state.exportProgress={active:false,progress:0,status:''};renderModal();const error=document.getElementById('exportError');error.textContent=reason.message||'내보내기에 실패했습니다.';error.hidden=false;}}};
 
     window.addEventListener('keydown',(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}else if(event.code==='Space'){event.preventDefault();togglePlayback();}});
   }
 
   function handleInspectorChange(target) {
-    const field=target.dataset.field;if(!field)return;
-    if(field==='canvas-ratio'){commit((project)=>({...project,canvas:{...project.canvas,ratio:target.value,...ratios[target.value]}}));return;}
-    const selection=state.selection;if(!selection)return;
-    commit((project)=>{if(selection.kind==='clip'){const clip=project.clips.find((item)=>item.id===selection.id);if(!clip)return project;const key=field.replace('clip-','');clip[key]=Number(target.value);clip.timelineStart=Math.max(0,clip.timelineStart);clip.sourceStart=Math.max(0,clip.sourceStart);clip.sourceEnd=Math.max(clip.sourceStart+.1,clip.sourceEnd);clip.volume=clamp(clip.volume,0,1);}else if(selection.kind==='text'){const text=project.texts.find((item)=>item.id===selection.id);if(!text)return project;const key=field.replace('text-','');text[key]=key==='text'||key==='color'?target.value:key==='background'?`${target.value}bb`:Number(target.value);text.start=Math.max(0,text.start);text.end=Math.max(text.start+.1,text.end);text.x=clamp(text.x,0,100);text.y=clamp(text.y,0,100);}return project;});
+    const field = target.dataset.field;
+    if (!field) return;
+    if (field === 'canvas-ratio') {
+      commit((project) => ({ ...project, canvas: { ...project.canvas, ratio: target.value, ...ratios[target.value] } }));
+      return;
+    }
+    const selection = state.selection;
+    if (!selection) return;
+
+    state.past.push(clone(state.project));
+    if (state.past.length > MAX_HISTORY) state.past.shift();
+    state.future = [];
+    const project = clone(state.project);
+    if (selection.kind === 'clip') {
+      const clip = project.clips.find((item) => item.id === selection.id);
+      if (!clip) return;
+      const key = field.replace('clip-', '');
+      clip[key] = Number(target.value);
+      clip.timelineStart = Math.max(0, clip.timelineStart);
+      clip.sourceStart = Math.max(0, clip.sourceStart);
+      clip.sourceEnd = Math.max(clip.sourceStart + .1, clip.sourceEnd);
+      clip.volume = clamp(clip.volume, 0, 1);
+    } else if (selection.kind === 'text') {
+      const text = project.texts.find((item) => item.id === selection.id);
+      if (!text) return;
+      const key = field.replace('text-', '');
+      text[key] = key === 'text' || key === 'color'
+        ? target.value
+        : key === 'background'
+          ? `${target.value}bb`
+          : Number(target.value);
+      text.start = Math.max(0, text.start);
+      text.end = Math.max(text.start + .1, text.end);
+      text.x = clamp(text.x, 0, 100);
+      text.y = clamp(text.y, 0, 100);
+    }
+    state.project = recalculate(project);
+    scheduleSave();
+    renderToolbar();
+    renderTimeline();
+    syncPreview();
   }
 
   async function hydrate() {

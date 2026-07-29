@@ -166,6 +166,12 @@ input, select, textarea { color: var(--text); }
 .ai-title small { display: block; margin-top: 1px; color: #7f8b9d; font-size: 7px; }
 .ai-section button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: #101620; color: #8d99aa; font-size: 8px; }
 .ai-section button span { padding: 2px 5px; border-radius: 4px; background: #1c2430; font-size: 6px; }
+.caption-section { background: linear-gradient(160deg, rgba(88,212,220,.08), transparent 70%); }
+.caption-section .ai-title > span { background: rgba(88,212,220,.13); color: var(--cyan); font-size: 8px; font-weight: 900; }
+.caption-section button { width: 100%; height: 32px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #2d4852; border-radius: 7px; background: #101c23; color: #b9dfe2; font-size: 8px; }
+.caption-section button:hover:not(:disabled) { border-color: var(--cyan); background: #142a31; }
+.caption-section button span { padding: 2px 5px; border-radius: 4px; background: rgba(88,212,220,.1); color: var(--cyan); font-size: 6px; }
+.caption-message { margin: 9px 0 0; padding: 7px 8px; border-radius: 6px; background: rgba(88,212,220,.08); color: #9fcbd0; font-size: 7px; line-height: 1.45; }
 .json-button { width: calc(100% - 30px); margin: 14px 15px 0; }
 
 /* timeline */
@@ -191,6 +197,8 @@ input, select, textarea { color: var(--text); }
 .timeline-clip.video { background: linear-gradient(90deg, #27204c, #332866); }
 .timeline-clip.audio { border-color: #31828a; background: #163c42; }
 .timeline-clip.text { border-color: #b17b36; background: #4a351a; cursor: pointer; }
+.timeline-clip.text.caption { border-color: #31828a; background: #173d44; }
+.timeline-clip.text.caption .clip-label b { color: var(--cyan); }
 .timeline-clip:hover, .timeline-clip.is-selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary), 0 4px 18px rgba(0,0,0,.3); z-index: 3; }
 .clip-thumb { position: absolute; inset: 0; opacity: .22; background-size: cover; background-position: center; }
 .clip-label { position: relative; z-index: 1; display: flex; align-items: center; gap: 5px; min-width: 0; padding: 0 10px; overflow: hidden; color: #dcd8f5; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
