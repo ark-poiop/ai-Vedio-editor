@@ -30,6 +30,9 @@ inclusion: always
 - deterministic 후보를 먼저 만든 뒤 의미 점수·순위·제목·요약·근거만 보강하는 AI Orchestrator와 장애 fallback
 - LLM key 비노출, URL·요청/응답 크기·timeout·동시성·strict schema 검증과 취소/stale 응답 차단
 - 별도 localStorage preference로 저장하는 의미 보강 toggle과 Provider 상태·AI badge·summary UI
+- 드래그·방향키로 조절하는 미디어/Inspector 폭과 타임라인 높이, 패널 표시 toggle 및 3개 layout preset
+- 프로젝트·편집·보기 작업을 묶은 접근 가능한 상단 메뉴와 compact toolbar·Safe Zone·reduced motion preference
+- LLM/STT/FFmpeg 상태와 자동 자막 기본 언어를 제공하는 통합 설정 모달(API key는 서버 환경변수 전용)
 - 최대 6개 후보의 점수·근거 검토, 구간 미리보기, 9:16 Timeline Patch 적용과 Undo/Redo
 - 원본 Blob 또는 장면 디코딩 실패 시 자막·타임라인 기반 graceful fallback
 - 브라우저 `AudioContext.decodeAudioData()` + 25ms RMS 윈도우 기반 침묵 감지
@@ -45,13 +48,16 @@ inclusion: always
 - FFmpeg `overlay`·`drawtext`·`amix`와 포커스 키프레임 crop을 이용한 서버 타임라인 합성
 - 내보내기 모달 MP4/WebM 선택, FFmpeg capability 안내와 WebM 자동 fallback
 - 독립 실행형 HTML과 강제 다운로드용 `.html.download` 빌드
+- Node.js 22·FFmpeg·Noto CJK를 포함하고 `2210` 포트로 실행하는 Dockerfile·Compose 구성
 - 아키텍처 및 28주 개발 계획 문서: `docs/ai-video-editor-development-plan.html`
 
 ## 주요 파일
 - `src/app.js`: 편집기 상태, UI, 미디어 처리, 렌더링을 포함한 애플리케이션 로직
 - `src/styles.css`: 편집기 전체 스타일
 - `scripts/build.mjs`: 분리형 산출물과 독립 실행형 HTML 생성
-- `scripts/serve.mjs`: 로컬 정적 서버, STT·LLM API, MP4 렌더 API 실행 진입점
+- `scripts/serve.mjs`: 기본 포트 2210의 로컬 정적 서버, STT·LLM API, MP4 렌더 API 실행 진입점
+- `Dockerfile`, `docker-compose.yml`: 포트 2210, FFmpeg·한글 글꼴, read-only root와 tmpfs를 사용하는 컨테이너 실행 구성
+- `.env.example`: Docker용 STT·LLM 서버 환경변수 예시
 - `server/app-server.mjs`: 정적 앱과 STT·LLM·렌더 API를 함께 제공하는 HTTP 서버
 - `server/stt-service.mjs`: 비동기 STT Job, mock/webhook/AssemblyAI Provider 선택, 결과 검증
 - `server/assemblyai-provider.mjs`: AssemblyAI 업로드·transcript polling·취소·retry·결과 정규화
@@ -59,6 +65,7 @@ inclusion: always
 - `server/render-service.mjs`: FFmpeg capability, 렌더 자산, 비동기 MP4 Job, 타임라인 filter graph
 - `docs/stt-provider-contract.md`: STT Job 및 외부 Provider 연동 계약
 - `docs/llm-provider-contract.md`: LLM 설정, 데이터 최소화, 응답 계약, fallback 및 배포 보안
+- `docs/docker-deployment.md`: Docker 포트 2210 실행, Provider 환경변수, 설정 메뉴와 운영 보안
 - `sample-media.svg`: 업로드 검증용 샘플
 - `sample-captions.srt`: 자막 워크플로우 검증용 샘플
 
@@ -69,22 +76,24 @@ npm run build
 ```
 
 브라우저 검증 시 확인할 핵심 흐름:
-1. 앱 초기 렌더링
-2. 미디어 업로드와 자동 타임라인 배치
-3. 프리뷰 표시
-4. 텍스트 또는 자막 편집
-5. 자동 자막 Job 생성 → Provider 진행률 → 제안 검토 → 승인 적용 → Undo
-6. AssemblyAI mock fetch로 upload 422 retry → transcript 생성 → polling → 한국어 화자 segment 정규화
-7. STT Job 취소 및 서버 shutdown → AssemblyAI 원격 transcript DELETE
-8. 침묵 분석 → 후보 선택·미리보기 → 글로벌 리플 삭제 → Undo
-9. 자동 리프레임 분석 → 키프레임 미리보기·수동 보정 → 9:16 적용 → Undo/Redo
-10. 숏폼 자동 후보 생성 → deterministic 후보 선표시 → LLM 의미 재평가·제목·요약·근거 보강 → 구간 미리보기 → 9:16 적용 → Undo/Redo
-11. LLM disabled·malformed·timeout 시 deterministic fallback, preference 저장, 요청 취소와 stale 응답 차단
-12. 후보 검토 중 목표 길이 또는 클립·자막 시간 변경 → 재생 중지와 stale 후보 무효화
-13. 원본 Blob 누락 프로젝트에서 자막 기반 fallback 및 자막 없는 프로젝트에서 목표 길이 visual fallback 확인
-14. MP4 capability 확인 → 자산 업로드 → Job 진행률·취소 → 결과 다운로드
-15. FFmpeg 미지원 환경에서 MP4 비활성 이유와 WebM fallback 확인
-16. WebM 내보내기 완료
+1. 앱 초기 렌더링과 메뉴·통합 설정 모달
+2. resize handle 포인터·키보드 조절, panel toggle, layout preset과 preference 복원
+3. 미디어 업로드와 자동 타임라인 배치
+4. 프리뷰 표시
+5. 텍스트 또는 자막 편집
+6. 자동 자막 Job 생성 → Provider 진행률 → 제안 검토 → 승인 적용 → Undo
+7. AssemblyAI mock fetch로 upload 422 retry → transcript 생성 → polling → 한국어 화자 segment 정규화
+8. STT Job 취소 및 서버 shutdown → AssemblyAI 원격 transcript DELETE
+9. 침묵 분석 → 후보 선택·미리보기 → 글로벌 리플 삭제 → Undo
+10. 자동 리프레임 분석 → 키프레임 미리보기·수동 보정 → 9:16 적용 → Undo/Redo
+11. 숏폼 자동 후보 생성 → deterministic 후보 선표시 → LLM 의미 재평가·제목·요약·근거 보강 → 구간 미리보기 → 9:16 적용 → Undo/Redo
+12. LLM disabled·malformed·timeout 시 deterministic fallback, preference 저장, 요청 취소와 stale 응답 차단
+13. 후보 검토 중 목표 길이 또는 클립·자막 시간 변경 → 재생 중지와 stale 후보 무효화
+14. 원본 Blob 누락 프로젝트에서 자막 기반 fallback 및 자막 없는 프로젝트에서 목표 길이 visual fallback 확인
+15. MP4 capability 확인 → 자산 업로드 → Job 진행률·취소 → 결과 다운로드
+16. FFmpeg 미지원 환경에서 MP4 비활성 이유와 WebM fallback 확인
+17. WebM 내보내기 완료
+18. Docker/Compose 포트 2210 static·health smoke test
 
 ## 제품 및 아키텍처 원칙
 - 비파괴 편집: 원본은 수정하지 않고 프로젝트 명령과 타임코드만 저장한다.
@@ -100,6 +109,7 @@ npm run build
 4. 침묵·장면 분석 파라미터 프리셋과 대용량 미디어용 Worker 최적화
 
 ## 알려진 제약
+- Docker 이미지는 Node.js 22 bookworm-slim을 기반으로 FFmpeg와 Noto CJK 글꼴을 설치한다. 현재 샌드박스는 외부 container registry 접근이 차단되어 image pull/build E2E는 수행할 수 없으며 Dockerfile·Compose parse와 로컬 포트 2210 server smoke test로 검증한다.
 - 서버 MP4 렌더링에는 `ffmpeg`, `ffprobe`, `drawtext`, H.264 인코더가 필요하다. 현재 샌드박스에는 FFmpeg가 없고 네트워크 정책상 설치할 수 없어 실제 인코딩 E2E 대신 capability·API·filter graph·주입형 Job lifecycle을 검증했다.
 - 렌더 자산과 Job 결과는 현재 서버 임시 디렉터리 및 메모리에 저장되어 프로세스 재시작 시 사라지며, 단일 노드 MVP 용도다.
 - 렌더 Job은 프로세스당 동시 2개로 제한하지만 API 인증·사용자별 격리는 아직 없다. 공유 배포 전 인증, 소유권, 영속 큐와 보관 정책이 필요하다.

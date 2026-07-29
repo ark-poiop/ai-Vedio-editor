@@ -4,6 +4,7 @@
   const STORAGE_KEY = 'shortform-studio:project:v1';
   const REFRAME_DRAFT_KEY = 'shortform-studio:reframe-draft:v1';
   const LLM_PREFERENCE_KEY = 'shortform-studio:llm-preference:v1';
+  const UI_PREFERENCE_KEY = 'shortform-studio:ui-preference:v1';
   const DB_NAME = 'shortform-studio';
   const DB_STORE = 'media-files';
   const MAX_HISTORY = 50;
@@ -13,6 +14,12 @@
     '1:1': { width: 1080, height: 1080 },
     '16:9': { width: 1920, height: 1080 },
   };
+  const defaultUiPreferences = Object.freeze({
+    libraryWidth: 250, inspectorWidth: 290, timelineHeight: 292,
+    libraryVisible: true, inspectorVisible: true, timelineVisible: true,
+    showSafeZone: true, compactToolbar: false, reducedMotion: false,
+    transcriptionLanguage: 'ko',
+  });
 
   const uid = () => crypto.randomUUID();
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -37,7 +44,14 @@
 
   const state = {
     project: emptyProject(), selection: null, playhead: 0, playing: false, zoom: 18,
-    past: [], future: [], saveStatus: 'loading', exportOpen: false,
+    past: [], future: [], saveStatus: 'loading', exportOpen: false, settingsOpen: false, appMenuOpen: false,
+    modalReturnFocus: null,
+    ui: { ...defaultUiPreferences },
+    serverStatus: {
+      refreshing: false,
+      stt: { available: false, provider: '', demo: false, message: '확인 전' },
+      render: { available: false, message: '확인 전' },
+    },
     exportFormat: 'webm', exportError: '',
     exportCapability: { checked: false, loading: false, available: false, message: '서버 MP4 상태를 확인하지 않았습니다.' },
     exportProgress: { active: false, progress: 0, status: '', jobId: '', format: '' },
@@ -74,6 +88,183 @@
     return { ...project, assets: project.assets.map((asset) => ({
       ...asset, url: '', thumbnail: asset.thumbnail?.startsWith('data:') ? asset.thumbnail : undefined,
     })) };
+  }
+
+  function normalizeUiPreferences(value = {}) {
+    return {
+      libraryWidth: clamp(Number(value.libraryWidth) || defaultUiPreferences.libraryWidth, 180, 420),
+      inspectorWidth: clamp(Number(value.inspectorWidth) || defaultUiPreferences.inspectorWidth, 220, 460),
+      timelineHeight: clamp(Number(value.timelineHeight) || defaultUiPreferences.timelineHeight, 150, 520),
+      libraryVisible: value.libraryVisible !== false,
+      inspectorVisible: value.inspectorVisible !== false,
+      timelineVisible: value.timelineVisible !== false,
+      showSafeZone: value.showSafeZone !== false,
+      compactToolbar: value.compactToolbar === true,
+      reducedMotion: value.reducedMotion === true,
+      transcriptionLanguage: ['ko', 'en', 'ja'].includes(value.transcriptionLanguage) ? value.transcriptionLanguage : 'ko',
+    };
+  }
+
+  function persistUiPreferences() {
+    try {
+      localStorage.setItem(UI_PREFERENCE_KEY, JSON.stringify(state.ui));
+    } catch { /* preference persistence is optional */ }
+  }
+
+  function applyUiPreferences() {
+    const shell = document.querySelector('.app-shell');
+    if (!shell) return;
+    const shellWidth = shell.clientWidth || window.innerWidth || 1280;
+    const handleWidth = (state.ui.libraryVisible ? 6 : 0) + (state.ui.inspectorVisible ? 6 : 0);
+    const sideBudget = Math.max(400, shellWidth - 320 - handleWidth);
+    let libraryWidth = state.ui.libraryVisible ? state.ui.libraryWidth : 0;
+    let inspectorWidth = state.ui.inspectorVisible ? state.ui.inspectorWidth : 0;
+    const sideTotal = libraryWidth + inspectorWidth;
+    if (sideTotal > sideBudget && sideTotal > 0) {
+      const overflow = sideTotal - sideBudget;
+      const libraryCapacity = Math.max(0, libraryWidth - 180);
+      const inspectorCapacity = Math.max(0, inspectorWidth - 220);
+      const capacity = libraryCapacity + inspectorCapacity;
+      if (capacity > 0) {
+        libraryWidth -= overflow * (libraryCapacity / capacity);
+        inspectorWidth -= overflow * (inspectorCapacity / capacity);
+      }
+    }
+    const availableTimelineHeight = Math.max(150, (shell.clientHeight || window.innerHeight || 800) - 64 - 240 - 6);
+    const timelineHeight = Math.min(state.ui.timelineHeight, availableTimelineHeight);
+    shell.style.setProperty('--library-width', `${Math.round(libraryWidth)}px`);
+    shell.style.setProperty('--inspector-width', `${Math.round(inspectorWidth)}px`);
+    shell.style.setProperty('--timeline-height', `${Math.round(timelineHeight)}px`);
+    shell.classList.toggle('library-hidden', !state.ui.libraryVisible);
+    shell.classList.toggle('inspector-hidden', !state.ui.inspectorVisible);
+    shell.classList.toggle('timeline-hidden', !state.ui.timelineVisible);
+    shell.classList.toggle('compact-toolbar', state.ui.compactToolbar);
+    shell.classList.toggle('reduced-motion', state.ui.reducedMotion);
+    const appliedDimensions = { libraryWidth, inspectorWidth, timelineHeight };
+    document.querySelectorAll('.layout-resizer').forEach((handle) => {
+      handle.setAttribute('aria-valuenow', String(Math.round(appliedDimensions[handle.dataset.resize])));
+    });
+    document.querySelector('.safe-zone')?.toggleAttribute('hidden', !state.ui.showSafeZone);
+    const menuButton = document.getElementById('appMenuButton');
+    if (menuButton) menuButton.setAttribute('aria-expanded', String(state.appMenuOpen));
+    const menu = document.getElementById('appMenu');
+    if (menu) menu.hidden = !state.appMenuOpen;
+  }
+
+  function updateUiPreferences(patch, { persist = true, render = false } = {}) {
+    state.ui = normalizeUiPreferences({ ...state.ui, ...patch });
+    applyUiPreferences();
+    if (persist) persistUiPreferences();
+    if (render && state.settingsOpen) renderModal();
+  }
+
+  function applyLayoutPreset(preset) {
+    const presets = {
+      balanced: { libraryWidth: 250, inspectorWidth: 290, timelineHeight: 292, libraryVisible: true, inspectorVisible: true, timelineVisible: true },
+      focus: { libraryVisible: false, inspectorVisible: false, timelineVisible: true, timelineHeight: 220 },
+      timeline: { libraryWidth: 210, inspectorWidth: 250, timelineHeight: 430, libraryVisible: true, inspectorVisible: true, timelineVisible: true },
+    };
+    updateUiPreferences(presets[preset] || presets.balanced, { render: true });
+  }
+
+  function toggleAppMenu(force) {
+    const menu = document.getElementById('appMenu');
+    const wasOpen = state.appMenuOpen;
+    state.appMenuOpen = typeof force === 'boolean' ? force : !state.appMenuOpen;
+    applyUiPreferences();
+    if (state.appMenuOpen) document.querySelector('#appMenu [role="menuitem"]:not(:disabled)')?.focus();
+    else if (wasOpen && menu?.contains(document.activeElement)) document.getElementById('appMenuButton')?.focus();
+  }
+
+  function openSettings() {
+    state.modalReturnFocus = document.activeElement;
+    state.appMenuOpen = false;
+    state.exportOpen = false;
+    state.settingsOpen = true;
+    applyUiPreferences();
+    renderModal();
+    queueMicrotask(() => document.getElementById('closeSettingsButton')?.focus());
+    void refreshServerStatus();
+  }
+
+  function closeSettings() {
+    const returnFocus = state.modalReturnFocus;
+    state.settingsOpen = false;
+    state.modalReturnFocus = null;
+    renderModal();
+    queueMicrotask(() => returnFocus?.isConnected && returnFocus.focus());
+  }
+
+  function bindLayoutResizer(handle) {
+    const dimension = handle.dataset.resize;
+    const horizontal = dimension === 'timelineHeight';
+    const direction = dimension === 'inspectorWidth' || horizontal ? -1 : 1;
+    const minimum = { libraryWidth: 180, inspectorWidth: 220, timelineHeight: 150 }[dimension];
+    const maximum = { libraryWidth: 420, inspectorWidth: 460, timelineHeight: 520 }[dimension];
+    const update = (value, persist = false) => {
+      const bounded = clamp(Math.round(value), minimum, maximum);
+      updateUiPreferences({ [dimension]: bounded }, { persist });
+      handle.setAttribute('aria-valuenow', String(bounded));
+    };
+    handle.onpointerdown = (event) => {
+      event.preventDefault();
+      handle.setPointerCapture?.(event.pointerId);
+      const start = horizontal ? event.clientY : event.clientX;
+      const initial = state.ui[dimension];
+      document.body.classList.add('is-resizing');
+      const move = (moveEvent) => update(initial + ((horizontal ? moveEvent.clientY : moveEvent.clientX) - start) * direction);
+      const finish = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', finish);
+        document.body.classList.remove('is-resizing');
+        persistUiPreferences();
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', finish, { once: true });
+    };
+    handle.onkeydown = (event) => {
+      const decrease = horizontal ? event.key === 'ArrowDown' : event.key === 'ArrowLeft';
+      const increase = horizontal ? event.key === 'ArrowUp' : event.key === 'ArrowRight';
+      if (!decrease && !increase) return;
+      event.preventDefault();
+      update(state.ui[dimension] + (increase ? 12 : -12), true);
+    };
+  }
+
+  async function refreshServerStatus() {
+    if (state.serverStatus.refreshing) return;
+    state.serverStatus.refreshing = true;
+    if (state.settingsOpen) renderModal();
+    const unavailable = (message) => ({ available: false, provider: '', demo: false, message });
+    if (location.protocol === 'file:') {
+      state.serverStatus.stt = unavailable('단일 HTML에서는 서버 기능을 사용할 수 없습니다.');
+      state.serverStatus.render = { available: false, message: '단일 HTML에서는 서버 기능을 사용할 수 없습니다.' };
+      state.serverStatus.refreshing = false;
+      if (state.settingsOpen) renderModal();
+      return;
+    }
+    const fetchHealth = async (path) => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 4000);
+      try {
+        const response = await fetch(path, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error('unavailable');
+        return await response.json();
+      } finally { clearTimeout(timeout); }
+    };
+    const [stt, render] = await Promise.allSettled([
+      fetchHealth('/api/stt/health'),
+      fetchHealth('/api/render/health'),
+      refreshLlmHealth(),
+    ]);
+    state.serverStatus.stt = stt.status === 'fulfilled'
+      ? { available: stt.value.status === 'ok', provider: String(stt.value.provider || ''), demo: stt.value.demo === true, message: stt.value.status === 'ok' ? '연결됨' : '사용 불가' }
+      : unavailable('상태를 확인할 수 없습니다.');
+    state.serverStatus.render = render.status === 'fulfilled'
+      ? { available: render.value.available === true, message: String(render.value.message || (render.value.available ? 'FFmpeg 사용 가능' : 'FFmpeg 사용 불가')) }
+      : { available: false, message: '상태를 확인할 수 없습니다.' };
+    state.serverStatus.refreshing = false;
+    if (state.settingsOpen) renderModal();
   }
 
   function openDatabase() {
@@ -230,12 +421,29 @@
     document.getElementById('root').innerHTML = `
       <main class="app-shell">
         <header class="editor-toolbar">
-          <div class="brand-lockup"><div class="brand-mark">S</div><div><strong>Shortform Studio</strong><span>브라우저 편집기 MVP</span></div></div>
+          <div class="brand-lockup"><div class="brand-mark">S</div><div><strong>Shortform Studio</strong><span>AI 숏폼 편집기</span></div></div>
           <div class="project-title-wrap"><input id="projectTitle" aria-label="프로젝트 제목"><button id="saveIndicator" class="save-indicator" type="button"><span></span><em>저장됨</em></button></div>
           <div class="toolbar-actions">
-            <div class="tool-group"><button id="undoButton" class="icon-button" title="실행 취소">↶</button><button id="redoButton" class="icon-button" title="다시 실행">↷</button></div>
-            <div class="tool-group action-labels"><button id="splitButton"><span>✂</span> 분할</button><button id="addTextButton"><span>T</span> 텍스트</button><button id="deleteButton"><span>⌫</span> 삭제</button></div>
-            <button id="downloadAppButton" class="button app-download-button" title="이 편집기를 HTML 파일로 저장">앱 파일 저장 <span>↓</span></button>
+            <div class="tool-group history-tools"><button id="undoButton" class="icon-button" title="실행 취소" aria-label="실행 취소">↶</button><button id="redoButton" class="icon-button" title="다시 실행" aria-label="다시 실행">↷</button></div>
+            <button id="addTextButton" class="button quick-tool" title="텍스트 추가"><span>T</span><em>텍스트</em></button>
+            <div class="app-menu-wrap">
+              <button id="appMenuButton" class="button menu-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="appMenu"><span>☰</span><em>메뉴</em></button>
+              <div id="appMenu" class="app-menu" role="menu" hidden>
+                <div class="menu-heading">프로젝트</div>
+                <button role="menuitem" data-menu-action="import-media"><span>＋</span><div><strong>미디어 가져오기</strong><small>영상·오디오·이미지</small></div></button>
+                <button role="menuitem" data-menu-action="import-captions"><span>CC</span><div><strong>자막 가져오기</strong><small>SRT · WebVTT</small></div></button>
+                <button role="menuitem" data-menu-action="download-app"><span>↓</span><div><strong>앱 파일 저장</strong><small>독립 실행형 HTML</small></div></button>
+                <button role="menuitem" data-menu-action="export-json"><span>{ }</span><div><strong>프로젝트 JSON</strong><small>편집 데이터 백업</small></div></button>
+                <div class="menu-heading">편집</div>
+                <div class="menu-inline"><button role="menuitem" data-menu-action="undo">실행 취소</button><button role="menuitem" data-menu-action="redo">다시 실행</button></div>
+                <div class="menu-inline"><button role="menuitem" data-menu-action="split">분할</button><button role="menuitem" data-menu-action="delete">삭제</button></div>
+                <div class="menu-heading">보기</div>
+                <button role="menuitemcheckbox" data-menu-action="toggle-library"><span>◫</span><div><strong>미디어 패널</strong><small>왼쪽 패널 표시/숨김</small></div><b data-menu-check="library">✓</b></button>
+                <button role="menuitemcheckbox" data-menu-action="toggle-inspector"><span>◧</span><div><strong>속성 패널</strong><small>오른쪽 패널 표시/숨김</small></div><b data-menu-check="inspector">✓</b></button>
+                <button role="menuitemcheckbox" data-menu-action="toggle-timeline"><span>▤</span><div><strong>타임라인</strong><small>하단 패널 표시/숨김</small></div><b data-menu-check="timeline">✓</b></button>
+              </div>
+            </div>
+            <button id="settingsButton" class="button settings-button" type="button" title="편집기 설정"><span>⚙</span><em>설정</em></button>
             <button id="exportButton" class="button primary export-button">내보내기 <span>↗</span></button>
           </div>
         </header>
@@ -247,16 +455,21 @@
             <div id="dropZone" class="drop-zone"><div class="upload-icon">＋</div><strong>미디어 추가</strong><span>파일을 끌어 놓거나 선택하세요</span><button id="pickFiles" class="button subtle" type="button">파일 선택</button></div>
             <p id="mediaError" class="inline-error" hidden></p><div id="assetList" class="asset-list"></div>
           </aside>
+          <div class="layout-resizer vertical library-resizer" data-resize="libraryWidth" role="separator" aria-label="미디어 패널 너비 조절" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="420" tabindex="0"></div>
           <section class="preview-section">
             <div id="previewStage" class="preview-stage"><div id="canvasFrame" class="canvas-frame"><div id="mediaHost"></div><div id="reframeBadge" class="reframe-badge" hidden></div><div id="textLayer"></div><div class="safe-zone"></div></div></div>
             <div class="playback-controls"><button id="backButton">−1s</button><button id="playButton" class="play-button">▶</button><button id="forwardButton">+1s</button><span class="timecode"><strong id="currentTime">00:00:00</strong><i>/</i><span id="durationTime">00:30:00</span></span><span id="previewQuality" class="preview-quality">미리보기 · 9:16</span></div>
           </section>
+          <div class="layout-resizer vertical inspector-resizer" data-resize="inspectorWidth" role="separator" aria-label="속성 패널 너비 조절" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="460" tabindex="0"></div>
           <aside class="inspector panel"><div class="panel-heading"><div><span class="eyebrow">INSPECTOR</span><h2>속성</h2></div></div><div id="inspectorContent" class="inspector-scroll"></div></aside>
         </div>
+        <div class="layout-resizer horizontal timeline-resizer" data-resize="timelineHeight" role="separator" aria-label="타임라인 높이 조절" aria-orientation="horizontal" aria-valuemin="150" aria-valuemax="520" tabindex="0"></div>
         <section class="timeline-section"><div class="timeline-toolbar"><div><strong>타임라인</strong><span id="elementCount">0개 요소</span></div><div class="zoom-control"><span>−</span><input id="zoomInput" type="range" min="8" max="60" value="18" aria-label="타임라인 확대"><span>＋</span></div></div><div id="timelineScroll" class="timeline-scroll"><div id="timelineContent" class="timeline-content"></div></div></section>
         <div id="modalRoot"></div>
       </main>`;
+    document.querySelectorAll('.layout-resizer').forEach(bindLayoutResizer);
     bindEvents();
+    applyUiPreferences();
   }
 
   function renderSaveStatus() {
@@ -271,11 +484,28 @@
     if (title !== document.activeElement) title.value = state.project.title;
     document.getElementById('undoButton').disabled = !state.past.length;
     document.getElementById('redoButton').disabled = !state.future.length;
-    document.getElementById('splitButton').disabled = state.selection?.kind !== 'clip';
-    document.getElementById('deleteButton').disabled = !state.selection;
+    const undoAction = document.querySelector('[data-menu-action="undo"]');
+    const redoAction = document.querySelector('[data-menu-action="redo"]');
+    const splitAction = document.querySelector('[data-menu-action="split"]');
+    const deleteAction = document.querySelector('[data-menu-action="delete"]');
+    if (undoAction) undoAction.disabled = !state.past.length;
+    if (redoAction) redoAction.disabled = !state.future.length;
+    if (splitAction) splitAction.disabled = state.selection?.kind !== 'clip';
+    if (deleteAction) deleteAction.disabled = !state.selection;
+    const checks = {
+      library: state.ui.libraryVisible,
+      inspector: state.ui.inspectorVisible,
+      timeline: state.ui.timelineVisible,
+    };
+    Object.entries(checks).forEach(([key, visible]) => {
+      const check = document.querySelector(`[data-menu-check="${key}"]`);
+      if (check) check.hidden = !visible;
+      check?.closest('[role="menuitemcheckbox"]')?.setAttribute('aria-checked', String(visible));
+    });
     const exportButton = document.getElementById('exportButton');
     exportButton.disabled = hasPendingReframe();
     exportButton.title = hasPendingReframe() ? '자동 리프레임 제안을 적용하거나 취소한 뒤 내보낼 수 있습니다.' : '';
+    applyUiPreferences();
     renderSaveStatus();
   }
 
@@ -1119,14 +1349,6 @@
     renderAll();
   }
 
-  function renderLlmSettingsSection() {
-    const llm = state.llm;
-    const statusLabel = {
-      checking: '확인 중', available: llm.demo ? 'DEMO' : '연결됨', unavailable: '미설정', error: '오프라인',
-    }[llm.healthStatus] || '미설정';
-    return `<section class="property-section llm-settings-section"><div class="ai-title"><span>AI</span><div><h3>LLM 도움 설정</h3><small>서버 전용 Provider · 키 비노출</small></div><em class="llm-health ${llm.healthStatus}">${statusLabel}</em></div><label class="llm-toggle"><span><strong>의미 기반 후보 보강</strong><small>순위·제목·요약·근거만 보강합니다.</small></span><input type="checkbox" data-llm-preference ${llm.semanticAssist ? 'checked' : ''}></label><div class="llm-provider"><span>${escapeHtml(llm.message)}</span>${llm.provider ? `<small>${escapeHtml(llm.provider)}${llm.model ? ` / ${escapeHtml(llm.model)}` : ''}</small>` : ''}</div><button id="refreshLlmHealthButton" ${llm.healthStatus === 'checking' ? 'disabled' : ''}>연결 상태 새로고침 <span>↻</span></button></section>`;
-  }
-
   function renderShortformSection(asset) {
     const review = state.shortform;
     const selected = review.candidates.find((candidate) => candidate.id === review.selectedId);
@@ -1176,7 +1398,6 @@
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
       <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</section>
-      ${renderLlmSettingsSection()}
       ${renderShortformSection(shortformAsset)}
       <section class="property-section reframe-section"><div class="ai-title"><span>▣</span><div><h3>세로 자동 리프레임</h3><small>${reframeAsset ? `${reframeHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(reframeAsset.name)}` : reframeHasBoundAsset ? '분석 대상이 삭제됨' : '가로 영상 필요'}</small></div></div><label class="field"><span>프레임 샘플 간격</span><select data-reframe-setting="sampleInterval" ${reframe.analyzing ? 'disabled' : ''}><option value="0.5" ${reframe.sampleInterval === 0.5 ? 'selected' : ''}>0.5초 · 정밀</option><option value="1" ${reframe.sampleInterval === 1 ? 'selected' : ''}>1초 · 균형</option><option value="2" ${reframe.sampleInterval === 2 ? 'selected' : ''}>2초 · 빠름</option></select></label><button id="analyzeReframeButton" ${!reframeAsset || reframe.analyzing || reframe.keyframes.length || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>${reframe.analyzing ? '피사체 추적 중…' : reframe.keyframes.length ? '키프레임 검토 중' : '세로 구도 분석'} <span>9:16</span></button>${appliedReframeCount && !reframe.keyframes.length ? `<button id="removeReframeButton" class="reframe-remove" data-reframe-asset="${reframeAsset.id}">적용된 리프레임 해제 <span>${appliedReframeCount}개</span></button>` : ''}${reframe.analyzing ? `<div class="reframe-status"><div><span>${escapeHtml(reframe.message)}</span><b>${Math.round(reframe.progress * 100)}%</b></div><progress value="${reframe.progress}" max="1"></progress><button id="cancelReframeButton" class="danger-action">분석 취소</button></div>` : reframe.message ? `<p class="reframe-message ${reframe.status === 'failed' ? 'error' : ''}">${escapeHtml(reframe.message)}</p>` : ''}${reframe.keyframes.length ? `<div class="reframe-review"><div class="reframe-review-head"><strong>포커스 키프레임 ${reframe.keyframes.length}개</strong><span>${reframeMethodLabel}</span></div><p class="reframe-help">시간을 눌러 구도를 확인하고 가로 위치를 직접 보정할 수 있습니다.</p><div class="reframe-keyframes">${reframe.keyframes.map((keyframe, index) => `<div class="reframe-keyframe"><button type="button" data-preview-reframe="${index}">${formatTime(keyframe.time, true)}</button><label><span>가로 ${Math.round(keyframe.x * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(keyframe.x * 100)}" data-reframe-keyframe="${index}" data-reframe-axis="x"></label><em>${Math.round(keyframe.confidence * 100)}%</em></div>`).join('')}</div><div class="proposal-actions"><button id="clearReframeButton">취소</button><button id="applyReframeButton" class="apply">9:16에 적용</button></div></div>` : ''}</section>
       <section class="property-section silence-section"><div class="ai-title"><span>∿</span><div><h3>침묵 구간 감지</h3><small>${silenceAsset ? `${silenceHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(silenceAsset.name)}` : silenceHasBoundAsset ? '분석 대상이 삭제됨' : '영상 또는 오디오 필요'}</small></div></div><div class="field-grid silence-settings"><label class="field"><span>임계값 dB</span><input data-silence-field="thresholdDb" type="number" min="-80" max="-5" step="1" value="${silence.thresholdDb}" ${silence.analyzing ? 'disabled' : ''}></label><label class="field"><span>최소 길이 초</span><input data-silence-field="minimumDuration" type="number" min="0.1" max="10" step="0.1" value="${silence.minimumDuration}" ${silence.analyzing ? 'disabled' : ''}></label></div><label class="field"><span>음성 여백 초 <b>${silence.padding.toFixed(2)}</b></span><input data-silence-field="padding" type="range" min="0" max="1" step="0.01" value="${silence.padding}" ${silence.analyzing ? 'disabled' : ''}></label><button id="analyzeSilenceButton" class="silence-analyze" ${!sttAsset || silence.analyzing || silence.candidates.length || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>${silence.analyzing ? '오디오 분석 중…' : silence.candidates.length ? '후보 검토 중' : '침묵 구간 분석'} <span>${silence.thresholdDb} dB</span></button>${silence.analyzing ? `<div class="silence-status"><div><span>${escapeHtml(silence.message)}</span><b>${Math.round(silence.progress * 100)}%</b></div><progress value="${silence.progress}" max="1"></progress></div>` : silence.message ? `<p class="silence-message ${silence.status === 'failed' ? 'error' : ''}">${escapeHtml(silence.message)}</p>` : ''}${silence.candidates.length ? `<div class="silence-review"><div class="silence-review-head"><strong>삭제 후보 ${silence.candidates.length}개</strong><span>${selectedSilences.length}개 선택</span></div><div class="silence-list">${silence.candidates.map((candidate, index) => { const occurrences = candidateTimelineRemovals[index]; const occurrenceDuration = occurrences.reduce((total, range) => total + range.end - range.start, 0); return `<div class="silence-candidate"><label><input type="checkbox" data-silence-candidate="${index}" ${candidate.selected ? 'checked' : ''} ${occurrences.length ? '' : 'disabled'}><span><strong>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)}</strong><small>${occurrences.length ? `타임라인 ${occurrences.length}곳 · 실제 ${occurrenceDuration.toFixed(2)}초` : '현재 타임라인에 적용 구간 없음'}</small></span></label><div class="silence-occurrences">${occurrences.map((range, occurrenceIndex) => `<button type="button" data-preview-silence="${index}" data-preview-occurrence="${occurrenceIndex}" title="${formatTime(range.start, true)}–${formatTime(range.end, true)}로 이동">${occurrenceIndex + 1}</button>`).join('')}</div></div>`; }).join('')}</div><div class="silence-total"><span>타임라인 ${selectedTimelineRemovals.length}개 구간</span><strong>${selectedSilenceDuration.toFixed(2)}초</strong></div><div class="proposal-actions"><button id="clearSilenceButton">취소</button><button id="applySilenceButton" class="apply" ${selectedTimelineRemovals.length && silenceAsset ? '' : 'disabled'}>리플 삭제 적용</button></div></div>` : ''}</section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
@@ -1199,8 +1420,34 @@
     document.getElementById('zoomInput').value = state.zoom;
   }
 
+  function renderSettingsModal() {
+    const ui = state.ui;
+    const statusBadge = (available, label) => `<span class="settings-status ${available ? 'available' : 'unavailable'}">${available ? '연결됨' : label}</span>`;
+    const stt = state.serverStatus.stt;
+    const render = state.serverStatus.render;
+    const llmAvailable = state.llm.available;
+    return `<div class="modal-backdrop"><section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><div class="modal-heading"><div><span class="eyebrow">PREFERENCES</span><h2 id="settingsTitle">편집기 설정</h2><p>레이아웃과 AI 작업 방식을 내 환경에 맞게 조정합니다.</p></div><button id="closeSettingsButton" aria-label="설정 닫기">×</button></div><div class="settings-scroll"><section class="settings-group"><div class="settings-group-title"><div><strong>작업 공간</strong><small>패널 경계를 직접 드래그하거나 정확한 크기를 지정하세요.</small></div><button id="resetLayoutButton" class="text-action">기본값 복원</button></div><div class="layout-presets"><button data-layout-preset="balanced"><span>▥</span><strong>균형</strong></button><button data-layout-preset="focus"><span>▣</span><strong>프리뷰 집중</strong></button><button data-layout-preset="timeline"><span>▤</span><strong>타임라인 집중</strong></button></div><div class="settings-grid"><label class="settings-range"><span>미디어 패널 <b>${Math.round(ui.libraryWidth)}px</b></span><input type="range" min="180" max="420" step="2" value="${ui.libraryWidth}" data-ui-setting="libraryWidth"></label><label class="settings-range"><span>속성 패널 <b>${Math.round(ui.inspectorWidth)}px</b></span><input type="range" min="220" max="460" step="2" value="${ui.inspectorWidth}" data-ui-setting="inspectorWidth"></label><label class="settings-range wide"><span>타임라인 높이 <b>${Math.round(ui.timelineHeight)}px</b></span><input type="range" min="150" max="520" step="2" value="${ui.timelineHeight}" data-ui-setting="timelineHeight"></label></div><div class="settings-toggles"><label><span><strong>미디어 패널</strong><small>왼쪽 라이브러리 표시</small></span><input type="checkbox" data-ui-toggle="libraryVisible" ${ui.libraryVisible ? 'checked' : ''}></label><label><span><strong>속성 패널</strong><small>오른쪽 Inspector 표시</small></span><input type="checkbox" data-ui-toggle="inspectorVisible" ${ui.inspectorVisible ? 'checked' : ''}></label><label><span><strong>타임라인</strong><small>하단 편집 영역 표시</small></span><input type="checkbox" data-ui-toggle="timelineVisible" ${ui.timelineVisible ? 'checked' : ''}></label></div></section><section class="settings-group"><div class="settings-group-title"><div><strong>편집 환경</strong><small>프리뷰와 인터페이스 표시 방식을 선택합니다.</small></div></div><div class="settings-toggles"><label><span><strong>Safe Zone 표시</strong><small>자막·UI 안전 영역 가이드</small></span><input type="checkbox" data-ui-toggle="showSafeZone" ${ui.showSafeZone ? 'checked' : ''}></label><label><span><strong>컴팩트 도구 모음</strong><small>아이콘 중심으로 상단 공간 절약</small></span><input type="checkbox" data-ui-toggle="compactToolbar" ${ui.compactToolbar ? 'checked' : ''}></label><label><span><strong>모션 줄이기</strong><small>전환과 강조 애니메이션 최소화</small></span><input type="checkbox" data-ui-toggle="reducedMotion" ${ui.reducedMotion ? 'checked' : ''}></label></div><label class="settings-select"><span>자동 자막 기본 언어</span><select data-ui-setting="transcriptionLanguage"><option value="ko" ${ui.transcriptionLanguage === 'ko' ? 'selected' : ''}>한국어</option><option value="en" ${ui.transcriptionLanguage === 'en' ? 'selected' : ''}>English</option><option value="ja" ${ui.transcriptionLanguage === 'ja' ? 'selected' : ''}>日本語</option></select></label></section><section class="settings-group"><div class="settings-group-title"><div><strong>AI 도움</strong><small>자격 증명은 브라우저가 아닌 Docker/서버 환경변수에서만 관리합니다.</small></div></div><div class="settings-toggles single"><label><span><strong>숏폼 의미 기반 보강</strong><small>LLM으로 순위·제목·요약·근거를 보강</small></span><input type="checkbox" data-setting-semantic ${state.llm.semanticAssist ? 'checked' : ''}></label></div><div class="server-status-grid"><article><div><span>LLM</span>${statusBadge(llmAvailable, state.llm.healthStatus === 'checking' ? '확인 중' : '미설정')}</div><strong>${escapeHtml(state.llm.provider || 'disabled')}</strong><small>${escapeHtml(state.llm.model || state.llm.message)}</small></article><article><div><span>STT</span>${statusBadge(stt.available, stt.message === '확인 전' ? '확인 전' : '사용 불가')}</div><strong>${escapeHtml(stt.provider || '미설정')}</strong><small>${escapeHtml(stt.demo ? 'Demo Provider' : stt.message)}</small></article><article><div><span>MP4</span>${statusBadge(render.available, '사용 불가')}</div><strong>FFmpeg</strong><small>${escapeHtml(render.message)}</small></article></div><div class="server-config-note"><strong>서버 설정</strong><p><code>LLM_PROVIDER</code>, <code>LLM_MODEL</code>, <code>LLM_API_KEY</code>, <code>STT_PROVIDER</code>는 Docker Compose 환경변수로 설정하세요. 비밀 키는 브라우저에 저장하지 않습니다.</p><button id="refreshServerStatusButton" aria-busy="${state.serverStatus.refreshing}" class="${state.serverStatus.refreshing ? 'is-loading' : ''}">${state.serverStatus.refreshing ? '상태 확인 중…' : '서버 상태 새로고침'}</button></div></section></div><div class="settings-actions"><button id="closeSettingsDoneButton" class="button primary">설정 완료</button></div></section></div>`;
+  }
+
   function renderModal() {
     const root = document.getElementById('modalRoot');
+    const active = root.contains(document.activeElement) ? document.activeElement : null;
+    const focusSelector = active?.id
+      ? `#${active.id}`
+      : active?.dataset.layoutPreset
+        ? `[data-layout-preset="${active.dataset.layoutPreset}"]`
+        : active?.dataset.uiSetting
+          ? `[data-ui-setting="${active.dataset.uiSetting}"]`
+          : active?.dataset.uiToggle
+            ? `[data-ui-toggle="${active.dataset.uiToggle}"]`
+            : active?.dataset.settingSemantic !== undefined
+              ? '[data-setting-semantic]'
+              : '';
+    if (state.settingsOpen) {
+      root.innerHTML = renderSettingsModal();
+      if (focusSelector) queueMicrotask(() => root.querySelector(focusSelector)?.focus());
+      return;
+    }
     if (!state.exportOpen) { root.innerHTML = ''; return; }
     const progress = state.exportProgress;
     const capability = state.exportCapability;
@@ -1757,7 +2004,7 @@
           'X-File-Name': encodeURIComponent(asset.name),
           'X-Asset-Id': asset.id,
           'X-Asset-Duration': String(asset.duration),
-          'X-Language': 'ko',
+          'X-Language': state.ui.transcriptionLanguage,
         },
         body: media,
       });
@@ -2467,11 +2714,29 @@
     document.getElementById('projectTitle').onchange=(event)=>commit((project)=>({...project,title:event.target.value}));
     document.getElementById('saveIndicator').onclick=()=>{localStorage.setItem(STORAGE_KEY,JSON.stringify(persistable(state.project)));state.saveStatus='saved';renderSaveStatus();};
     document.getElementById('undoButton').onclick=undo; document.getElementById('redoButton').onclick=redo;
-    document.getElementById('splitButton').onclick=splitSelected; document.getElementById('addTextButton').onclick=addText; document.getElementById('deleteButton').onclick=deleteSelection;
+    document.getElementById('addTextButton').onclick=addText;
+    document.getElementById('appMenuButton').onclick=(event)=>{event.stopPropagation();toggleAppMenu();};
+    document.getElementById('settingsButton').onclick=openSettings;
+    document.getElementById('appMenu').onclick=(event)=>{
+      const action = event.target.closest('[data-menu-action]')?.dataset.menuAction;
+      if (!action) return;
+      if (action === 'import-media') document.getElementById('fileInput').click();
+      else if (action === 'import-captions') document.getElementById('captionInput').click();
+      else if (action === 'download-app') downloadStandaloneApp();
+      else if (action === 'export-json') downloadJson();
+      else if (action === 'undo') undo();
+      else if (action === 'redo') redo();
+      else if (action === 'split') splitSelected();
+      else if (action === 'delete') deleteSelection();
+      else if (action === 'toggle-library') updateUiPreferences({ libraryVisible: !state.ui.libraryVisible });
+      else if (action === 'toggle-inspector') updateUiPreferences({ inspectorVisible: !state.ui.inspectorVisible });
+      else if (action === 'toggle-timeline') updateUiPreferences({ timelineVisible: !state.ui.timelineVisible });
+      toggleAppMenu(false);
+      renderToolbar();
+    };
     document.getElementById('backButton').onclick=()=>seek(state.playhead-1);document.getElementById('forwardButton').onclick=()=>seek(state.playhead+1);document.getElementById('playButton').onclick=togglePlayback;
     document.getElementById('zoomInput').oninput=(event)=>{state.zoom=Number(event.target.value);renderTimeline();};
-    document.getElementById('downloadAppButton').onclick=downloadStandaloneApp;
-    document.getElementById('exportButton').onclick=()=>{if(hasPendingReframe())return;state.exportOpen=true;state.exportError='';renderModal();void refreshRenderCapability();};
+    document.getElementById('exportButton').onclick=()=>{if(hasPendingReframe())return;state.settingsOpen=false;state.exportOpen=true;state.exportError='';renderModal();void refreshRenderCapability();};
 
     document.getElementById('assetList').onclick=(event)=>{const add=event.target.closest('[data-add-asset]'),remove=event.target.closest('[data-remove-asset]'),select=event.target.closest('[data-select-asset]');if(add){event.stopPropagation();addAssetToTimeline(add.dataset.addAsset);}else if(remove){event.stopPropagation();void removeAsset(remove.dataset.removeAsset);}else if(select){state.selection={kind:'asset',id:select.dataset.selectAsset};renderAll();}};
     document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){state.selection={kind:'text',id:target.dataset.selectText};renderAll();}};
@@ -2529,14 +2794,46 @@
       else if (target.id === 'clearSilenceButton') clearSilenceCandidates();
     };
     const modalRoot = document.getElementById('modalRoot');
+    modalRoot.oninput = (event) => {
+      const target = event.target;
+      if (!state.settingsOpen || !target.dataset.uiSetting || target.type !== 'range') return;
+      updateUiPreferences({ [target.dataset.uiSetting]: Number(target.value) }, { persist: false });
+      const value = target.closest('label')?.querySelector('b');
+      if (value) value.textContent = `${Math.round(Number(target.value))}px`;
+    };
     modalRoot.onchange = (event) => {
-      if (event.target.name !== 'exportFormat' || state.exportProgress.active) return;
-      state.exportFormat = event.target.value === 'mp4' && state.exportCapability.available ? 'mp4' : 'webm';
+      const target = event.target;
+      if (state.settingsOpen) {
+        if (target.dataset.uiToggle) updateUiPreferences({ [target.dataset.uiToggle]: target.checked });
+        else if (target.dataset.uiSetting) updateUiPreferences({ [target.dataset.uiSetting]: target.type === 'range' ? Number(target.value) : target.value });
+        else if (target.dataset.settingSemantic !== undefined) updateLlmPreference(target.checked);
+        return;
+      }
+      if (target.name !== 'exportFormat' || state.exportProgress.active) return;
+      state.exportFormat = target.value === 'mp4' && state.exportCapability.available ? 'mp4' : 'webm';
       state.exportError = '';
       renderModal();
     };
     modalRoot.onclick = (event) => {
-      if (event.target.id === 'closeModal' && !state.exportProgress.active) {
+      const preset = event.target.closest('[data-layout-preset]')?.dataset.layoutPreset;
+      if (preset) {
+        applyLayoutPreset(preset);
+        return;
+      }
+      if (event.target.id === 'closeSettingsButton' || event.target.id === 'closeSettingsDoneButton') {
+        closeSettings();
+      } else if (event.target.id === 'resetLayoutButton') {
+        updateUiPreferences({
+          libraryWidth: defaultUiPreferences.libraryWidth,
+          inspectorWidth: defaultUiPreferences.inspectorWidth,
+          timelineHeight: defaultUiPreferences.timelineHeight,
+          libraryVisible: defaultUiPreferences.libraryVisible,
+          inspectorVisible: defaultUiPreferences.inspectorVisible,
+          timelineVisible: defaultUiPreferences.timelineVisible,
+        }, { render: true });
+      } else if (event.target.id === 'refreshServerStatusButton') {
+        void refreshServerStatus();
+      } else if (event.target.id === 'closeModal' && !state.exportProgress.active) {
         state.exportOpen = false;
         state.exportError = '';
         renderModal();
@@ -2548,7 +2845,32 @@
       }
     };
 
-    window.addEventListener('keydown',(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}else if(event.code==='Space'){event.preventDefault();togglePlayback();}});
+    document.addEventListener('pointerdown', (event) => {
+      if (state.appMenuOpen && !event.target.closest('.app-menu-wrap')) toggleAppMenu(false);
+    });
+    window.addEventListener('resize', applyUiPreferences);
+    window.addEventListener('keydown',(event)=>{
+      if (event.key === 'Escape') {
+        if (state.appMenuOpen) { toggleAppMenu(false); return; }
+        if (state.settingsOpen) { closeSettings(); return; }
+      }
+      if (state.settingsOpen && event.key === 'Tab') {
+        const dialog = document.querySelector('.settings-dialog');
+        const focusable = [...(dialog?.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])];
+        if (focusable.length) {
+          const first = focusable[0];
+          const last = focusable.at(-1);
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); return; }
+          if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); return; }
+        }
+      }
+      if (event.target.closest('button, [role="menuitem"], [role="menuitemcheckbox"], a')) return;
+      if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}
+      else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}
+      else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}
+      else if(event.code==='Space'){event.preventDefault();togglePlayback();}
+    });
   }
 
   function handleInspectorChange(target) {
@@ -2602,6 +2924,14 @@
   }
 
   async function hydrate() {
+    try {
+      const rawUiPreference = localStorage.getItem(UI_PREFERENCE_KEY);
+      state.ui = rawUiPreference ? normalizeUiPreferences(JSON.parse(rawUiPreference)) : { ...defaultUiPreferences };
+    } catch {
+      state.ui = { ...defaultUiPreferences };
+    }
+    applyUiPreferences();
+
     try {
       const rawPreference = localStorage.getItem(LLM_PREFERENCE_KEY);
       if (rawPreference) {

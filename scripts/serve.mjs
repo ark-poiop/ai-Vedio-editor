@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { createShortformServer } from '../server/app-server.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const port = Number(process.env.PORT || 4173);
+const port = Number(process.env.PORT || 2210);
 const host = process.env.HOST || '127.0.0.1';
 const server = createShortformServer({ root });
 

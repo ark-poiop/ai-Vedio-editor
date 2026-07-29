@@ -1,0 +1,26 @@
+services:
+  shortform-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: shortform-studio:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2210:2210"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 2210
+      STT_PROVIDER: ${STT_PROVIDER:-mock}
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
+      ASSEMBLYAI_SPEAKER_LABELS: ${ASSEMBLYAI_SPEAKER_LABELS:-true}
+      LLM_PROVIDER: ${LLM_PROVIDER:-disabled}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_REQUEST_TIMEOUT_MS: ${LLM_REQUEST_TIMEOUT_MS:-30000}
+    read_only: true
+    tmpfs:
+      - /tmp:size=${SHORTFORM_TMPFS_SIZE:-8g},mode=1777
+    security_opt:
+      - no-new-privileges:true

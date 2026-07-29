@@ -1,0 +1,12 @@
+.git
+.github
+.kiro
+node_modules
+dist
+semantic-review
+.env
+.env.*
+!.env.example
+*.local
+.DS_Store
+npm-debug.log*
