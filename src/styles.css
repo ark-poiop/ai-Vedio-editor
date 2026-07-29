@@ -300,3 +300,35 @@ input, select, textarea { color: var(--text); }
 .silence-section .proposal-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 5px; }
 .silence-section .proposal-actions button { justify-content: center; margin-top: 6px; }
 .silence-section .proposal-actions .apply { border-color: var(--primary); background: var(--primary); color: #0a1207; font-weight: 850; }
+
+
+/* vertical auto reframe */
+.reframe-badge { position: absolute; z-index: 4; top: 10px; left: 50%; padding: 4px 7px; transform: translateX(-50%); border: 1px solid rgba(88,212,220,.5); border-radius: 999px; background: rgba(7,19,23,.8); color: var(--cyan); font-size: 6px; font-weight: 850; letter-spacing: .08em; pointer-events: none; }
+.reframe-section { background: linear-gradient(160deg, rgba(88,212,220,.07), transparent 72%); }
+.reframe-section .ai-title > span { background: rgba(88,212,220,.13); color: var(--cyan); font-size: 13px; }
+.reframe-section button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #2d4852; border-radius: 7px; background: #101c23; color: #b9dfe2; font-size: 8px; }
+.reframe-section button:hover:not(:disabled) { border-color: var(--cyan); background: #142a31; }
+.reframe-section button span { padding: 2px 5px; border-radius: 4px; background: rgba(88,212,220,.1); color: var(--cyan); font-size: 6px; }
+.reframe-section .reframe-remove { border-color: rgba(255,107,120,.26); background: rgba(255,107,120,.05); color: #ffabb3; }
+.reframe-message { margin: 8px 0 0; padding: 7px 8px; border-radius: 6px; background: rgba(88,212,220,.08); color: #9fcbd0; font-size: 7px; line-height: 1.5; }
+.reframe-message.error { background: rgba(255,107,120,.08); color: #ffafb6; }
+.reframe-status { margin-top: 9px; padding: 9px; border: 1px solid #2d4852; border-radius: 8px; background: rgba(11,28,34,.78); }
+.reframe-status > div { display: flex; justify-content: space-between; gap: 8px; color: #9fcbd0; font-size: 7px; }
+.reframe-status progress { width: 100%; height: 5px; margin-top: 6px; accent-color: var(--cyan); }
+.reframe-review { margin-top: 9px; padding: 9px; border: 1px solid #315b64; border-radius: 9px; background: #0e1d22; }
+.reframe-review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.reframe-review-head strong { color: #d2eef0; font-size: 9px; }
+.reframe-review-head span { color: var(--cyan); font-size: 7px; }
+.reframe-help { margin: 5px 0 7px; color: #728f94; font-size: 6px; line-height: 1.45; }
+.reframe-keyframes { max-height: 164px; overflow-y: auto; border-top: 1px solid rgba(255,255,255,.06); }
+.reframe-keyframe { display: grid; grid-template-columns: 48px minmax(0,1fr) 26px; align-items: center; gap: 6px; min-height: 39px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.reframe-section .reframe-keyframe > button { width: 48px; height: 23px; justify-content: center; margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.reframe-keyframe label { min-width: 0; }
+.reframe-keyframe label span { display: block; margin-bottom: 2px; color: #8eaaae; font-size: 6px; }
+.reframe-keyframe input { width: 100%; height: 10px; margin: 0; accent-color: var(--cyan); }
+.reframe-keyframe em { color: #709197; font-size: 6px; font-style: normal; text-align: right; }
+.reframe-section .proposal-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 5px; }
+.reframe-section .proposal-actions button { justify-content: center; margin-top: 7px; }
+.reframe-section .proposal-actions .apply { border-color: var(--cyan); background: var(--cyan); color: #071316; font-weight: 850; }
+
+.reframe-section .reframe-status .danger-action { height: 25px; justify-content: center; margin-top: 6px; border-color: rgba(255,107,120,.3); background: rgba(255,107,120,.06); color: #ff9da6; }

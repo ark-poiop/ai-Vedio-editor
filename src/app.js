@@ -2,6 +2,7 @@
   'use strict';
 
   const STORAGE_KEY = 'shortform-studio:project:v1';
+  const REFRAME_DRAFT_KEY = 'shortform-studio:reframe-draft:v1';
   const DB_NAME = 'shortform-studio';
   const DB_STORE = 'media-files';
   const MAX_HISTORY = 50;
@@ -41,6 +42,10 @@
     animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
     sttJob: { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false },
     sttProposal: null, sttPollTimer: 0,
+    reframe: {
+      analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
+      sampleInterval: 1, method: '', keyframes: [],
+    },
     silence: {
       analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
       thresholdDb: -40, minimumDuration: 0.6, padding: 0.12, candidates: [],
@@ -160,6 +165,22 @@
     }, 450);
   }
 
+  function syncReframeDraftWithProject() {
+    if (!state.reframe.assetId || !state.reframe.keyframes.length) return;
+    const asset = state.project.assets.find((item) => item.id === state.reframe.assetId);
+    if (!asset) {
+      clearReframeProposal();
+      return;
+    }
+    const applied = Boolean(asset.reframe?.enabled)
+      || state.project.clips.some((clip) => clip.assetId === asset.id && clip.reframe?.enabled);
+    state.reframe.status = applied ? 'applied' : 'completed';
+    state.reframe.message = applied
+      ? `${asset.name}에 자동 리프레임이 적용되어 있습니다.`
+      : '리프레임 적용이 실행 취소되었습니다. 보정한 키프레임은 다시 적용할 수 있습니다.';
+    persistReframeDraft();
+  }
+
   function commit(mutator) {
     state.past.push(clone(state.project));
     if (state.past.length > MAX_HISTORY) state.past.shift();
@@ -173,13 +194,17 @@
   function undo() {
     if (!state.past.length) return;
     state.future.unshift(clone(state.project));
-    state.project = state.past.pop(); scheduleSave(); renderAll();
+    state.project = state.past.pop();
+    syncReframeDraftWithProject();
+    scheduleSave(); renderAll();
   }
 
   function redo() {
     if (!state.future.length) return;
     state.past.push(clone(state.project));
-    state.project = state.future.shift(); scheduleSave(); renderAll();
+    state.project = state.future.shift();
+    syncReframeDraftWithProject();
+    scheduleSave(); renderAll();
   }
 
   function currentClip(track, time = state.playhead) {
@@ -208,7 +233,7 @@
             <p id="mediaError" class="inline-error" hidden></p><div id="assetList" class="asset-list"></div>
           </aside>
           <section class="preview-section">
-            <div id="previewStage" class="preview-stage"><div id="canvasFrame" class="canvas-frame"><div id="mediaHost"></div><div id="textLayer"></div><div class="safe-zone"></div></div></div>
+            <div id="previewStage" class="preview-stage"><div id="canvasFrame" class="canvas-frame"><div id="mediaHost"></div><div id="reframeBadge" class="reframe-badge" hidden></div><div id="textLayer"></div><div class="safe-zone"></div></div></div>
             <div class="playback-controls"><button id="backButton">−1s</button><button id="playButton" class="play-button">▶</button><button id="forwardButton">+1s</button><span class="timecode"><strong id="currentTime">00:00:00</strong><i>/</i><span id="durationTime">00:30:00</span></span><span id="previewQuality" class="preview-quality">미리보기 · 9:16</span></div>
           </section>
           <aside class="inspector panel"><div class="panel-heading"><div><span class="eyebrow">INSPECTOR</span><h2>속성</h2></div></div><div id="inspectorContent" class="inspector-scroll"></div></aside>
@@ -233,6 +258,9 @@
     document.getElementById('redoButton').disabled = !state.future.length;
     document.getElementById('splitButton').disabled = state.selection?.kind !== 'clip';
     document.getElementById('deleteButton').disabled = !state.selection;
+    const exportButton = document.getElementById('exportButton');
+    exportButton.disabled = hasPendingReframe();
+    exportButton.title = hasPendingReframe() ? '자동 리프레임 제안을 적용하거나 취소한 뒤 내보낼 수 있습니다.' : '';
     renderSaveStatus();
   }
 
@@ -252,11 +280,88 @@
       </article>`).join('');
   }
 
+  function hasPendingReframe() {
+    return state.reframe.analyzing || (state.reframe.keyframes.length > 0 && state.reframe.status !== 'applied');
+  }
+
+  function previewCanvasConfig() {
+    return state.reframe.keyframes.length && state.reframe.status !== 'applied'
+      ? { ratio: '9:16', ...ratios['9:16'], background: state.project.canvas.background }
+      : state.project.canvas;
+  }
+
+  function activeReframeForClip(clip) {
+    if (!clip) return null;
+    if (state.reframe.assetId === clip.assetId && state.reframe.keyframes.length && state.reframe.status !== 'applied') {
+      return {
+        enabled: true, targetRatio: '9:16', keyframes: state.reframe.keyframes,
+        method: state.reframe.method, draft: true,
+      };
+    }
+    return clip.reframe?.enabled ? clip.reframe : null;
+  }
+
+  function focusAtSourceTime(reframe, sourceTime) {
+    const keyframes = reframe?.keyframes || [];
+    if (!keyframes.length) return { x: 0.5, y: 0.5 };
+    if (sourceTime <= keyframes[0].time) return keyframes[0];
+    const last = keyframes.at(-1);
+    if (sourceTime >= last.time) return last;
+    const nextIndex = keyframes.findIndex((keyframe) => keyframe.time >= sourceTime);
+    const previous = keyframes[nextIndex - 1];
+    const next = keyframes[nextIndex];
+    const progress = (sourceTime - previous.time) / Math.max(0.001, next.time - previous.time);
+    return {
+      x: previous.x + (next.x - previous.x) * progress,
+      y: previous.y + (next.y - previous.y) * progress,
+    };
+  }
+
+  function objectPositionForFocus(sourceWidth, sourceHeight, targetWidth, targetHeight, focus) {
+    const sourceRatio = sourceWidth / Math.max(1, sourceHeight);
+    const targetRatio = targetWidth / Math.max(1, targetHeight);
+    let x = 50;
+    let y = 50;
+    if (sourceRatio > targetRatio) {
+      const visibleFraction = targetRatio / sourceRatio;
+      x = clamp((focus.x - visibleFraction / 2) / Math.max(0.001, 1 - visibleFraction), 0, 1) * 100;
+    } else if (sourceRatio < targetRatio) {
+      const visibleFraction = sourceRatio / targetRatio;
+      y = clamp((focus.y - visibleFraction / 2) / Math.max(0.001, 1 - visibleFraction), 0, 1) * 100;
+    }
+    return `${x.toFixed(2)}% ${y.toFixed(2)}%`;
+  }
+
+  function updatePreviewReframe() {
+    const clip = currentClip('video');
+    const asset = clip && state.project.assets.find((item) => item.id === clip.assetId);
+    const reframe = activeReframeForClip(clip);
+    const visual = state.previewVisual;
+    const badge = document.getElementById('reframeBadge');
+    if (visual instanceof HTMLVideoElement && clip && asset && reframe) {
+      const sourceTime = clip.sourceStart + state.playhead - clip.timelineStart;
+      const focus = focusAtSourceTime(reframe, sourceTime);
+      const previewCanvas = previewCanvasConfig();
+      visual.style.objectPosition = objectPositionForFocus(
+        asset.width || visual.videoWidth, asset.height || visual.videoHeight,
+        previewCanvas.width, previewCanvas.height, focus,
+      );
+      if (badge) {
+        badge.hidden = false;
+        badge.textContent = reframe.draft ? 'AUTO REFRAME · 미리보기' : 'AUTO REFRAME';
+      }
+    } else {
+      if (visual) visual.style.objectPosition = '50% 50%';
+      if (badge) badge.hidden = true;
+    }
+  }
+
   function syncPreview(force = false) {
+    const previewCanvas = previewCanvasConfig();
     const frame = document.getElementById('canvasFrame');
-    frame.style.aspectRatio = `${state.project.canvas.width} / ${state.project.canvas.height}`;
-    frame.style.background = state.project.canvas.background;
-    document.getElementById('previewQuality').textContent = `미리보기 · ${state.project.canvas.ratio}`;
+    frame.style.aspectRatio = `${previewCanvas.width} / ${previewCanvas.height}`;
+    frame.style.background = previewCanvas.background;
+    document.getElementById('previewQuality').textContent = `미리보기 · ${previewCanvas.ratio}${hasPendingReframe() ? ' · 리프레임 검토' : ''}`;
     const clip = currentClip('video');
     const asset = clip && state.project.assets.find((item) => item.id === clip.assetId);
     const host = document.getElementById('mediaHost');
@@ -293,6 +398,7 @@
         if (state.playing) void audio.play();
       }
     }
+    updatePreviewReframe();
     renderPreviewTexts(); renderPlayback();
   }
 
@@ -328,7 +434,7 @@
     state.lastFrameAt = timestamp;
     state.playhead = Math.min(state.project.duration, state.playhead + delta);
     if (currentClip('video')?.id !== previousVisualId || currentClip('audio')?.id !== previousAudioId) syncPreview(true);
-    else { renderPreviewTexts(); renderPlayback(); }
+    else { updatePreviewReframe(); renderPreviewTexts(); renderPlayback(); }
     if (state.playhead >= state.project.duration) { state.playing = false; state.previewVisual?.pause?.(); state.previewAudio?.pause?.(); renderPlayback(); return; }
     state.animation = requestAnimationFrame(animate);
   }
@@ -345,6 +451,15 @@
     const text = state.selection?.kind === 'text' ? state.project.texts.find((item) => item.id === state.selection.id) : null;
     const sttAsset = getTranscribableAsset();
     const sttProposal = state.sttProposal;
+    const reframe = state.reframe;
+    const reframeHasBoundAsset = reframe.analyzing || reframe.keyframes.length > 0;
+    const reframeAsset = reframeHasBoundAsset
+      ? state.project.assets.find((item) => item.id === reframe.assetId)
+      : getReframeAsset();
+    const appliedReframeCount = reframeAsset
+      ? state.project.clips.filter((item) => item.assetId === reframeAsset.id && item.reframe?.enabled).length
+      : 0;
+    const reframeMethodLabel = { face: '얼굴 추적', hybrid: '얼굴+시각', visual: '시각 중심' }[reframe.method] || '분석';
     const silence = state.silence;
     const silenceHasBoundAsset = silence.analyzing || silence.candidates.length > 0;
     const silenceAsset = silenceHasBoundAsset
@@ -366,7 +481,8 @@
       ${text ? `<section class="property-section"><div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
-      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}<button disabled>세로 자동 리프레임 <span>준비 중</span></button></section>
+      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</section>
+      <section class="property-section reframe-section"><div class="ai-title"><span>▣</span><div><h3>세로 자동 리프레임</h3><small>${reframeAsset ? `${reframeHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(reframeAsset.name)}` : reframeHasBoundAsset ? '분석 대상이 삭제됨' : '가로 영상 필요'}</small></div></div><label class="field"><span>프레임 샘플 간격</span><select data-reframe-setting="sampleInterval" ${reframe.analyzing ? 'disabled' : ''}><option value="0.5" ${reframe.sampleInterval === 0.5 ? 'selected' : ''}>0.5초 · 정밀</option><option value="1" ${reframe.sampleInterval === 1 ? 'selected' : ''}>1초 · 균형</option><option value="2" ${reframe.sampleInterval === 2 ? 'selected' : ''}>2초 · 빠름</option></select></label><button id="analyzeReframeButton" ${!reframeAsset || reframe.analyzing || reframe.keyframes.length ? 'disabled' : ''}>${reframe.analyzing ? '피사체 추적 중…' : reframe.keyframes.length ? '키프레임 검토 중' : '세로 구도 분석'} <span>9:16</span></button>${appliedReframeCount && !reframe.keyframes.length ? `<button id="removeReframeButton" class="reframe-remove" data-reframe-asset="${reframeAsset.id}">적용된 리프레임 해제 <span>${appliedReframeCount}개</span></button>` : ''}${reframe.analyzing ? `<div class="reframe-status"><div><span>${escapeHtml(reframe.message)}</span><b>${Math.round(reframe.progress * 100)}%</b></div><progress value="${reframe.progress}" max="1"></progress><button id="cancelReframeButton" class="danger-action">분석 취소</button></div>` : reframe.message ? `<p class="reframe-message ${reframe.status === 'failed' ? 'error' : ''}">${escapeHtml(reframe.message)}</p>` : ''}${reframe.keyframes.length ? `<div class="reframe-review"><div class="reframe-review-head"><strong>포커스 키프레임 ${reframe.keyframes.length}개</strong><span>${reframeMethodLabel}</span></div><p class="reframe-help">시간을 눌러 구도를 확인하고 가로 위치를 직접 보정할 수 있습니다.</p><div class="reframe-keyframes">${reframe.keyframes.map((keyframe, index) => `<div class="reframe-keyframe"><button type="button" data-preview-reframe="${index}">${formatTime(keyframe.time, true)}</button><label><span>가로 ${Math.round(keyframe.x * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(keyframe.x * 100)}" data-reframe-keyframe="${index}" data-reframe-axis="x"></label><em>${Math.round(keyframe.confidence * 100)}%</em></div>`).join('')}</div><div class="proposal-actions"><button id="clearReframeButton">취소</button><button id="applyReframeButton" class="apply">9:16에 적용</button></div></div>` : ''}</section>
       <section class="property-section silence-section"><div class="ai-title"><span>∿</span><div><h3>침묵 구간 감지</h3><small>${silenceAsset ? `${silenceHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(silenceAsset.name)}` : silenceHasBoundAsset ? '분석 대상이 삭제됨' : '영상 또는 오디오 필요'}</small></div></div><div class="field-grid silence-settings"><label class="field"><span>임계값 dB</span><input data-silence-field="thresholdDb" type="number" min="-80" max="-5" step="1" value="${silence.thresholdDb}" ${silence.analyzing ? 'disabled' : ''}></label><label class="field"><span>최소 길이 초</span><input data-silence-field="minimumDuration" type="number" min="0.1" max="10" step="0.1" value="${silence.minimumDuration}" ${silence.analyzing ? 'disabled' : ''}></label></div><label class="field"><span>음성 여백 초 <b>${silence.padding.toFixed(2)}</b></span><input data-silence-field="padding" type="range" min="0" max="1" step="0.01" value="${silence.padding}" ${silence.analyzing ? 'disabled' : ''}></label><button id="analyzeSilenceButton" class="silence-analyze" ${!sttAsset || silence.analyzing || silence.candidates.length ? 'disabled' : ''}>${silence.analyzing ? '오디오 분석 중…' : silence.candidates.length ? '후보 검토 중' : '침묵 구간 분석'} <span>${silence.thresholdDb} dB</span></button>${silence.analyzing ? `<div class="silence-status"><div><span>${escapeHtml(silence.message)}</span><b>${Math.round(silence.progress * 100)}%</b></div><progress value="${silence.progress}" max="1"></progress></div>` : silence.message ? `<p class="silence-message ${silence.status === 'failed' ? 'error' : ''}">${escapeHtml(silence.message)}</p>` : ''}${silence.candidates.length ? `<div class="silence-review"><div class="silence-review-head"><strong>삭제 후보 ${silence.candidates.length}개</strong><span>${selectedSilences.length}개 선택</span></div><div class="silence-list">${silence.candidates.map((candidate, index) => { const occurrences = candidateTimelineRemovals[index]; const occurrenceDuration = occurrences.reduce((total, range) => total + range.end - range.start, 0); return `<div class="silence-candidate"><label><input type="checkbox" data-silence-candidate="${index}" ${candidate.selected ? 'checked' : ''} ${occurrences.length ? '' : 'disabled'}><span><strong>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)}</strong><small>${occurrences.length ? `타임라인 ${occurrences.length}곳 · 실제 ${occurrenceDuration.toFixed(2)}초` : '현재 타임라인에 적용 구간 없음'}</small></span></label><div class="silence-occurrences">${occurrences.map((range, occurrenceIndex) => `<button type="button" data-preview-silence="${index}" data-preview-occurrence="${occurrenceIndex}" title="${formatTime(range.start, true)}–${formatTime(range.end, true)}로 이동">${occurrenceIndex + 1}</button>`).join('')}</div></div>`; }).join('')}</div><div class="silence-total"><span>타임라인 ${selectedTimelineRemovals.length}개 구간</span><strong>${selectedSilenceDuration.toFixed(2)}초</strong></div><div class="proposal-actions"><button id="clearSilenceButton">취소</button><button id="applySilenceButton" class="apply" ${selectedTimelineRemovals.length && silenceAsset ? '' : 'disabled'}>리플 삭제 적용</button></div></div>` : ''}</section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
   }
 
@@ -420,15 +536,26 @@
       const asset = project.assets.find((item) => item.id === id); if (!asset) return project;
       const trackId = asset.kind === 'audio' ? 'audio' : 'video';
       const start = project.clips.filter((clip) => clip.trackId === trackId).reduce((end, clip) => Math.max(end, clip.timelineStart + clip.sourceEnd - clip.sourceStart), 0);
-      project.clips.push({ id: uid(), assetId: id, trackId, timelineStart: start, sourceStart: 0, sourceEnd: Math.max(.1, asset.duration), volume: 1 }); return project;
+      const newClip = { id: uid(), assetId: id, trackId, timelineStart: start, sourceStart: 0, sourceEnd: Math.max(.1, asset.duration), volume: 1 };
+      const inheritedReframe = asset.reframe || project.clips.find((clip) => clip.assetId === id && clip.reframe?.enabled)?.reframe;
+      if (inheritedReframe) newClip.reframe = clone(inheritedReframe);
+      project.clips.push(newClip); return project;
     });
   }
 
   async function removeAsset(id) {
     await removeBlob(id).catch(() => undefined);
     const invalidatesSilence = state.silence.assetId === id;
+    const invalidatesReframe = state.reframe.assetId === id;
     commit((project) => ({ ...project, assets: project.assets.filter((asset) => asset.id !== id), clips: project.clips.filter((clip) => clip.assetId !== id) }));
     state.selection = null;
+    if (invalidatesReframe) {
+      state.reframe = {
+        ...state.reframe, analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', method: '', keyframes: [],
+        analysisVersion: state.reframe.analysisVersion + 1,
+      };
+      persistReframeDraft();
+    }
     if (invalidatesSilence) {
       state.silence = {
         ...state.silence, analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', candidates: [],
@@ -549,6 +676,337 @@
       if (selected && (selected.kind === 'video' || selected.kind === 'audio')) return selected;
     }
     return state.project.assets.find((asset) => asset.kind === 'video' || asset.kind === 'audio');
+  }
+
+  function getReframeAsset() {
+    if (state.selection?.kind === 'asset') {
+      const selected = state.project.assets.find((asset) => asset.id === state.selection.id);
+      if (selected?.kind === 'video') return selected;
+    }
+    if (state.selection?.kind === 'clip') {
+      const clip = state.project.clips.find((item) => item.id === state.selection.id);
+      const selected = clip && state.project.assets.find((asset) => asset.id === clip.assetId);
+      if (selected?.kind === 'video') return selected;
+    }
+    return state.project.assets.find((asset) => asset.kind === 'video');
+  }
+
+  function persistReframeDraft() {
+    try {
+      if (!state.reframe.assetId || !state.reframe.keyframes.length) {
+        localStorage.removeItem(REFRAME_DRAFT_KEY);
+        return;
+      }
+      localStorage.setItem(REFRAME_DRAFT_KEY, JSON.stringify({
+        assetId: state.reframe.assetId,
+        sampleInterval: state.reframe.sampleInterval,
+        method: state.reframe.method,
+        status: state.reframe.status === 'applied' ? 'applied' : 'completed',
+        keyframes: state.reframe.keyframes,
+      }));
+    } catch { /* Project editing remains available if draft persistence is unavailable. */ }
+  }
+
+  function renderReframeState(patch) {
+    state.reframe = { ...state.reframe, ...patch };
+    renderInspector();
+    updatePreviewReframe();
+  }
+
+  function seekVideoFrame(video, time) {
+    const target = clamp(time, 0, Math.max(0, video.duration - 0.04));
+    if (video.readyState >= 2 && Math.abs(video.currentTime - target) < 0.01) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('영상 프레임 탐색 시간이 초과되었습니다.'));
+      }, 12000);
+      const complete = () => { cleanup(); resolve(); };
+      const failed = () => { cleanup(); reject(new Error('분석할 영상 프레임을 읽지 못했습니다.')); };
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        video.removeEventListener('seeked', complete);
+        video.removeEventListener('error', failed);
+      };
+      video.addEventListener('seeked', complete, { once: true });
+      video.addEventListener('error', failed, { once: true });
+      video.currentTime = target;
+    });
+  }
+
+  function visualFocusFromFrame(imageData, previousData) {
+    const { data, width, height } = imageData;
+    let weightedX = 0;
+    let weightedY = 0;
+    let totalWeight = 0;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        const red = data[offset];
+        const green = data[offset + 1];
+        const blue = data[offset + 2];
+        const maximum = Math.max(red, green, blue);
+        const minimum = Math.min(red, green, blue);
+        const luminance = (red + green + blue) / 3;
+        const saturation = maximum - minimum;
+        const motion = previousData
+          ? (Math.abs(red - previousData[offset]) + Math.abs(green - previousData[offset + 1]) + Math.abs(blue - previousData[offset + 2])) / 3
+          : 0;
+        const leftOffset = x > 0 ? offset - 4 : offset;
+        const leftLuminance = (data[leftOffset] + data[leftOffset + 1] + data[leftOffset + 2]) / 3;
+        const edge = Math.abs(luminance - leftLuminance);
+        const verticalBias = 0.82 + 0.18 * (1 - Math.abs(y / Math.max(1, height - 1) - 0.45));
+        let weight = (motion * 1.7 + saturation * 0.75 + edge * 0.55) * verticalBias;
+        if (luminance < 8) weight *= 0.12;
+        weightedX += x * weight;
+        weightedY += y * weight;
+        totalWeight += weight;
+      }
+    }
+    if (totalWeight < width * height * 0.5) return { x: 0.5, y: 0.45, confidence: 0.15, method: 'center' };
+    return {
+      x: clamp(weightedX / totalWeight / Math.max(1, width - 1), 0, 1),
+      y: clamp(weightedY / totalWeight / Math.max(1, height - 1), 0, 1),
+      confidence: clamp(totalWeight / (width * height * 55), 0.18, 0.82),
+      method: 'visual',
+    };
+  }
+
+  async function focusFromFrame(canvas, context, detector, previousData) {
+    if (detector) {
+      try {
+        const faces = await detector.detect(canvas);
+        if (faces.length) {
+          const face = faces.sort((first, second) => second.boundingBox.width * second.boundingBox.height - first.boundingBox.width * first.boundingBox.height)[0];
+          const box = face.boundingBox;
+          return {
+            x: clamp((box.x + box.width / 2) / canvas.width, 0, 1),
+            y: clamp((box.y + box.height * 0.43) / canvas.height, 0, 1),
+            confidence: 0.96,
+            method: 'face',
+            imageData: context.getImageData(0, 0, canvas.width, canvas.height),
+          };
+        }
+      } catch { /* Fall back to visual saliency for this frame. */ }
+    }
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    return { ...visualFocusFromFrame(imageData, previousData?.data), imageData };
+  }
+
+  function smoothReframeKeyframes(keyframes) {
+    return keyframes.map((keyframe, index) => {
+      const previous = keyframes[Math.max(0, index - 1)];
+      const next = keyframes[Math.min(keyframes.length - 1, index + 1)];
+      const centerWeight = keyframe.method === 'face' ? 4 : 2;
+      const denominator = centerWeight + 2;
+      return {
+        ...keyframe,
+        x: clamp((previous.x + keyframe.x * centerWeight + next.x) / denominator, 0, 1),
+        y: clamp((previous.y + keyframe.y * centerWeight + next.y) / denominator, 0, 1),
+      };
+    });
+  }
+
+  async function analyzeReframe() {
+    const asset = getReframeAsset();
+    if (!asset) {
+      renderReframeState({ status: 'failed', message: '자동 리프레임에는 영상 파일이 필요합니다.' });
+      return;
+    }
+    const analysisVersion = state.reframe.analysisVersion + 1;
+    const sampleInterval = state.reframe.sampleInterval;
+    renderReframeState({
+      analyzing: true, status: 'loading', progress: 0.03, message: `${asset.name} 프레임을 준비하고 있습니다.`,
+      assetId: asset.id, analysisVersion, method: '', keyframes: [],
+    });
+    const isCancelled = () => state.reframe.analysisVersion !== analysisVersion;
+    let objectUrl = '';
+    try {
+      const blob = await loadBlob(asset.id);
+      if (!blob) throw new Error('원본 영상을 로컬 저장소에서 찾을 수 없습니다.');
+      objectUrl = URL.createObjectURL(blob);
+      const video = document.createElement('video');
+      video.muted = true; video.playsInline = true; video.preload = 'auto'; video.src = objectUrl;
+      await waitFor(video, 'loadeddata');
+      if (isCancelled()) return;
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, 180 / Math.max(1, video.videoWidth), 110 / Math.max(1, video.videoHeight));
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const FaceDetectorClass = window.FaceDetector;
+      let detector = null;
+      if (FaceDetectorClass) {
+        try { detector = new FaceDetectorClass({ fastMode: true, maxDetectedFaces: 4 }); } catch { detector = null; }
+      }
+      const duration = Math.max(0.1, Number.isFinite(video.duration) ? video.duration : asset.duration);
+      const effectiveInterval = sampleInterval;
+      const times = [];
+      for (let time = 0; time < duration; time += effectiveInterval) times.push(Math.min(time, duration - 0.04));
+      if (!times.length || duration - times.at(-1) > effectiveInterval * 0.35) times.push(Math.max(0, duration - 0.04));
+      const keyframes = [];
+      let previousData = null;
+      for (let index = 0; index < times.length; index += 1) {
+        if (isCancelled()) return;
+        await seekVideoFrame(video, times[index]);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const focus = await focusFromFrame(canvas, context, detector, previousData);
+        previousData = focus.imageData;
+        keyframes.push({
+          time: Number(times[index].toFixed(3)), x: focus.x, y: focus.y,
+          confidence: focus.confidence, method: focus.method,
+        });
+        state.reframe.progress = 0.08 + ((index + 1) / times.length) * 0.88;
+        state.reframe.message = `프레임 ${index + 1}/${times.length}에서 피사체를 추적하고 있습니다.`;
+        renderInspector();
+        await waitForAnalysisTurn();
+      }
+      if (isCancelled()) return;
+      const smoothed = smoothReframeKeyframes(keyframes);
+      const faceCount = smoothed.filter((keyframe) => keyframe.method === 'face').length;
+      const method = faceCount === smoothed.length ? 'face' : faceCount ? 'hybrid' : 'visual';
+      renderReframeState({
+        analyzing: false, status: 'completed', progress: 1, method, keyframes: smoothed,
+        message: `${smoothed.length}개 포커스 키프레임을 만들었습니다. 위치를 검토하고 적용하세요.`,
+      });
+      persistReframeDraft();
+      renderToolbar();
+      previewReframeKeyframe(0);
+    } catch (reason) {
+      if (isCancelled()) return;
+      renderReframeState({
+        analyzing: false, status: 'failed', progress: 1, keyframes: [],
+        message: reason instanceof Error ? `리프레임 분석 실패: ${reason.message}` : '영상 프레임을 분석하지 못했습니다.',
+      });
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (!isCancelled() && state.reframe.analyzing) {
+        renderReframeState({ analyzing: false, status: 'failed', progress: 1, message: '리프레임 분석이 예기치 않게 종료되었습니다.' });
+      }
+    }
+  }
+
+  function previewReframeKeyframe(index) {
+    const keyframe = state.reframe.keyframes[index];
+    if (!keyframe) return;
+    const clip = state.project.clips.find((item) => item.assetId === state.reframe.assetId
+      && keyframe.time >= item.sourceStart && keyframe.time < item.sourceEnd);
+    if (!clip) return;
+    seek(clip.timelineStart + keyframe.time - clip.sourceStart);
+  }
+
+  function updateReframeKeyframe(index, axis, value, seekToFrame = false) {
+    const keyframe = state.reframe.keyframes[index];
+    if (!keyframe || (axis !== 'x' && axis !== 'y')) return;
+    keyframe[axis] = clamp(Number(value) / 100, 0, 1);
+    state.reframe.status = 'completed';
+    state.reframe.message = '포커스 위치를 수정했습니다. 변경된 구도를 다시 적용하세요.';
+    persistReframeDraft();
+    renderToolbar();
+    if (seekToFrame) previewReframeKeyframe(index);
+    else updatePreviewReframe();
+  }
+
+  function updateReframeSetting(value) {
+    const sampleInterval = clamp(Number(value), 0.5, 3);
+    if (!Number.isFinite(sampleInterval)) return;
+    state.reframe = {
+      ...state.reframe, sampleInterval, analyzing: false, status: 'idle', progress: 0,
+      message: state.reframe.keyframes.length ? '샘플 간격이 변경되었습니다. 다시 분석하세요.' : '',
+      assetId: '', method: '', keyframes: [], analysisVersion: state.reframe.analysisVersion + 1,
+    };
+    persistReframeDraft();
+    renderToolbar();
+    renderInspector();
+    syncPreview(true);
+  }
+
+  function clearReframeProposal() {
+    state.reframe = {
+      ...state.reframe, analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', method: '', keyframes: [],
+      analysisVersion: state.reframe.analysisVersion + 1,
+    };
+    persistReframeDraft();
+    renderToolbar();
+    renderInspector();
+    syncPreview(true);
+  }
+
+  function cancelReframeAnalysis() {
+    if (!state.reframe.analyzing) return;
+    state.reframe = {
+      ...state.reframe, analyzing: false, status: 'cancelled', progress: 0,
+      message: '자동 리프레임 분석을 취소했습니다.', assetId: '', method: '', keyframes: [],
+      analysisVersion: state.reframe.analysisVersion + 1,
+    };
+    persistReframeDraft();
+    renderToolbar();
+    renderInspector();
+    syncPreview(true);
+  }
+
+  function applyReframeProposal() {
+    const asset = state.project.assets.find((item) => item.id === state.reframe.assetId && item.kind === 'video');
+    if (!asset || !state.reframe.keyframes.length) {
+      renderReframeState({ status: 'failed', message: '적용할 리프레임 키프레임이 없습니다.' });
+      return;
+    }
+    const targetClipCount = state.project.clips.filter((clip) => clip.trackId === 'video' && clip.assetId === asset.id).length;
+    if (!targetClipCount) {
+      renderReframeState({ status: 'failed', message: '타임라인에 적용할 영상 클립이 없습니다.' });
+      return;
+    }
+    const configuration = {
+      enabled: true,
+      targetRatio: '9:16',
+      method: state.reframe.method,
+      analyzedAt: new Date().toISOString(),
+      keyframes: state.reframe.keyframes.map((keyframe) => ({
+        time: keyframe.time,
+        x: Number(keyframe.x.toFixed(4)),
+        y: Number(keyframe.y.toFixed(4)),
+        confidence: Number(keyframe.confidence.toFixed(3)),
+        method: keyframe.method,
+      })),
+    };
+    let appliedCount = 0;
+    commit((project) => {
+      project.canvas = { ...project.canvas, ratio: '9:16', ...ratios['9:16'] };
+      const projectAsset = project.assets.find((item) => item.id === asset.id);
+      if (projectAsset) projectAsset.reframe = clone(configuration);
+      project.clips.forEach((clip) => {
+        if (clip.trackId === 'video' && clip.assetId === asset.id) {
+          clip.reframe = clone(configuration);
+          appliedCount += 1;
+        }
+      });
+      return project;
+    });
+    state.reframe = {
+      ...state.reframe, analyzing: false, status: 'applied', progress: 1,
+      message: `${asset.name}의 ${appliedCount}개 클립에 자동 리프레임을 적용했습니다. Undo로 복원할 수 있습니다.`,
+    };
+    persistReframeDraft();
+    renderAll();
+  }
+
+  function removeAppliedReframe(assetId) {
+    const affected = state.project.clips.filter((clip) => clip.assetId === assetId && clip.reframe?.enabled).length;
+    if (!affected) return;
+    commit((project) => {
+      const projectAsset = project.assets.find((item) => item.id === assetId);
+      if (projectAsset?.reframe) delete projectAsset.reframe;
+      project.clips.forEach((clip) => {
+        if (clip.assetId === assetId && clip.reframe) delete clip.reframe;
+      });
+      return project;
+    });
+    state.reframe = {
+      ...state.reframe, status: 'idle', progress: 0, assetId: '', method: '', keyframes: [],
+      message: `${affected}개 클립에서 자동 리프레임을 해제했습니다.`,
+    };
+    persistReframeDraft();
+    renderAll();
   }
 
   async function apiPayload(response) {
@@ -997,9 +1455,21 @@
   const safeName = (name) => name.replace(/[^a-zA-Z0-9가-힣-_]/g, '-') || 'shortform';
   function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 
-  function drawCover(context, source, sourceWidth, sourceHeight, width, height) {
-    const scale = Math.max(width/sourceWidth, height/sourceHeight); const w = sourceWidth*scale, h = sourceHeight*scale;
-    context.drawImage(source, (width-w)/2, (height-h)/2, w, h);
+  function drawCover(context, source, sourceWidth, sourceHeight, width, height, focus = { x: 0.5, y: 0.5 }) {
+    const sourceRatio = sourceWidth / Math.max(1, sourceHeight);
+    const targetRatio = width / Math.max(1, height);
+    let sourceX = 0;
+    let sourceY = 0;
+    let cropWidth = sourceWidth;
+    let cropHeight = sourceHeight;
+    if (sourceRatio > targetRatio) {
+      cropWidth = sourceHeight * targetRatio;
+      sourceX = clamp(focus.x * sourceWidth - cropWidth / 2, 0, sourceWidth - cropWidth);
+    } else if (sourceRatio < targetRatio) {
+      cropHeight = sourceWidth / targetRatio;
+      sourceY = clamp(focus.y * sourceHeight - cropHeight / 2, 0, sourceHeight - cropHeight);
+    }
+    context.drawImage(source, sourceX, sourceY, cropWidth, cropHeight, 0, 0, width, height);
   }
 
   function drawText(context, text, scale, width, height) {
@@ -1079,7 +1549,10 @@
             if (activeId !== clip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
             element.volume = clip.volume;
             if (element.paused) void element.play();
-            if (element.readyState >= 2) drawCover(context, element, element.videoWidth, element.videoHeight, width, height);
+            if (element.readyState >= 2) {
+              const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
+              drawCover(context, element, element.videoWidth, element.videoHeight, width, height, focus);
+            }
             activeId = clip.id;
           } else if (element) drawCover(context, element, element.naturalWidth, element.naturalHeight, width, height);
         }
@@ -1131,7 +1604,7 @@
     document.getElementById('backButton').onclick=()=>seek(state.playhead-1);document.getElementById('forwardButton').onclick=()=>seek(state.playhead+1);document.getElementById('playButton').onclick=togglePlayback;
     document.getElementById('zoomInput').oninput=(event)=>{state.zoom=Number(event.target.value);renderTimeline();};
     document.getElementById('downloadAppButton').onclick=downloadStandaloneApp;
-    document.getElementById('exportButton').onclick=()=>{state.exportOpen=true;renderModal();};
+    document.getElementById('exportButton').onclick=()=>{if(hasPendingReframe())return;state.exportOpen=true;renderModal();};
 
     document.getElementById('assetList').onclick=(event)=>{const add=event.target.closest('[data-add-asset]'),remove=event.target.closest('[data-remove-asset]'),select=event.target.closest('[data-select-asset]');if(add){event.stopPropagation();addAssetToTimeline(add.dataset.addAsset);}else if(remove){event.stopPropagation();void removeAsset(remove.dataset.removeAsset);}else if(select){state.selection={kind:'asset',id:select.dataset.selectAsset};renderAll();}};
     document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){state.selection={kind:'text',id:target.dataset.selectText};renderAll();}};
@@ -1143,12 +1616,23 @@
 
     document.getElementById('inspectorContent').onchange=(event)=>{
       const target = event.target;
-      if (target.dataset.silenceCandidate !== undefined) toggleSilenceCandidate(Number(target.dataset.silenceCandidate), target.checked);
+      if (target.dataset.reframeSetting) updateReframeSetting(target.value);
+      else if (target.dataset.reframeKeyframe !== undefined) {
+        updateReframeKeyframe(Number(target.dataset.reframeKeyframe), target.dataset.reframeAxis, target.value, true);
+        renderInspector();
+      } else if (target.dataset.silenceCandidate !== undefined) toggleSilenceCandidate(Number(target.dataset.silenceCandidate), target.checked);
       else if (target.dataset.silenceField) updateSilenceSetting(target.dataset.silenceField, target.value);
       else handleInspectorChange(target);
     };
-    document.getElementById('inspectorContent').oninput=(event)=>{if(event.target.type==='range'||event.target.type==='color')handleInspectorChange(event.target);};
-    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.dataset.previewSilence !== undefined)previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));else if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();else if(target.id==='analyzeSilenceButton')void analyzeSilence();else if(target.id==='applySilenceButton')applySilenceRemoval();else if(target.id==='clearSilenceButton')clearSilenceCandidates();};
+    document.getElementById('inspectorContent').oninput=(event)=>{
+      const target = event.target;
+      if (target.dataset.reframeKeyframe !== undefined) {
+        updateReframeKeyframe(Number(target.dataset.reframeKeyframe), target.dataset.reframeAxis, target.value);
+        const label = target.closest('label')?.querySelector('span');
+        if (label) label.textContent = `가로 ${Math.round(Number(target.value))}%`;
+      } else if(target.type==='range'||target.type==='color') handleInspectorChange(target);
+    };
+    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.dataset.previewReframe !== undefined)previewReframeKeyframe(Number(target.dataset.previewReframe));else if(target.dataset.previewSilence !== undefined)previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));else if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();else if(target.id==='analyzeReframeButton')void analyzeReframe();else if(target.id==='cancelReframeButton')cancelReframeAnalysis();else if(target.id==='applyReframeButton')applyReframeProposal();else if(target.id==='clearReframeButton')clearReframeProposal();else if(target.id==='removeReframeButton')removeAppliedReframe(target.dataset.reframeAsset);else if(target.id==='analyzeSilenceButton')void analyzeSilence();else if(target.id==='applySilenceButton')applySilenceRemoval();else if(target.id==='clearSilenceButton')clearSilenceCandidates();};
     document.getElementById('modalRoot').onclick=async(event)=>{if(event.target.id==='closeModal'){state.exportOpen=false;renderModal();}if(event.target.id==='startExport'){const quality=document.getElementById('exportQuality').value;state.playing=false;syncPreview();try{const blob=await exportVideo(quality);downloadBlob(blob,`${safeName(state.project.title)}.webm`);state.exportProgress={active:false,progress:1,status:'완료'};state.exportOpen=false;renderModal();}catch(reason){state.exportProgress={active:false,progress:0,status:''};renderModal();const error=document.getElementById('exportError');error.textContent=reason.message||'내보내기에 실패했습니다.';error.hidden=false;}}};
 
     window.addEventListener('keydown',(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}else if(event.code==='Space'){event.preventDefault();togglePlayback();}});
@@ -1200,9 +1684,47 @@
 
   async function hydrate() {
     try {
-      const raw=localStorage.getItem(STORAGE_KEY);if(raw){const project=JSON.parse(raw);project.assets=await Promise.all(project.assets.map(async(asset)=>{const blob=await loadBlob(asset.id);return{...asset,url:blob?URL.createObjectURL(blob):''};}));state.project=recalculate(project);}
-    } catch { state.project=emptyProject(); }
-    state.saveStatus='saved';renderAll();
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const project = JSON.parse(raw);
+        project.assets = await Promise.all(project.assets.map(async (asset) => {
+          const blob = await loadBlob(asset.id);
+          return { ...asset, url: blob ? URL.createObjectURL(blob) : '' };
+        }));
+        state.project = recalculate(project);
+      }
+    } catch {
+      state.project = emptyProject();
+    }
+
+    try {
+      const rawDraft = localStorage.getItem(REFRAME_DRAFT_KEY);
+      if (rawDraft) {
+        const draft = JSON.parse(rawDraft);
+        const hasAsset = state.project.assets.some((asset) => asset.id === draft.assetId && asset.kind === 'video');
+        const validKeyframes = Array.isArray(draft.keyframes) && draft.keyframes.length
+          && draft.keyframes.every((keyframe) => Number.isFinite(keyframe.time) && Number.isFinite(keyframe.x) && Number.isFinite(keyframe.y));
+        if (hasAsset && validKeyframes) {
+          state.reframe = {
+            ...state.reframe,
+            analyzing: false,
+            status: draft.status === 'applied' ? 'applied' : 'completed',
+            progress: 1,
+            message: '저장된 자동 리프레임 키프레임을 복원했습니다.',
+            assetId: draft.assetId,
+            sampleInterval: Number(draft.sampleInterval) || 1,
+            method: draft.method || 'visual',
+            keyframes: draft.keyframes,
+          };
+          syncReframeDraftWithProject();
+        } else localStorage.removeItem(REFRAME_DRAFT_KEY);
+      }
+    } catch {
+      localStorage.removeItem(REFRAME_DRAFT_KEY);
+    }
+
+    state.saveStatus = 'saved';
+    renderAll();
   }
 
   mountApp(); renderAll(); void hydrate();
