@@ -267,3 +267,36 @@ input, select, textarea { color: var(--text); }
   .editor-toolbar { grid-template-columns: 180px 1fr auto; }
   .brand-lockup span, .save-indicator { display: none; }
 }
+
+
+/* browser RMS silence review */
+.silence-section { background: linear-gradient(160deg, rgba(156,255,99,.065), transparent 72%); }
+.silence-section .ai-title > span { background: rgba(156,255,99,.11); color: var(--primary); font-size: 15px; font-weight: 900; }
+.silence-settings { align-items: end; }
+.silence-section button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #31442f; border-radius: 7px; background: #101a13; color: #b8d5ae; font-size: 8px; }
+.silence-section button:hover:not(:disabled) { border-color: var(--primary); background: #17231a; color: #e2f7db; }
+.silence-section button span { padding: 2px 5px; border-radius: 4px; background: rgba(156,255,99,.08); color: var(--primary); font-size: 6px; }
+.silence-message { margin: 8px 0 0; padding: 7px 8px; border-radius: 6px; background: rgba(156,255,99,.07); color: #afd09f; font-size: 7px; line-height: 1.5; }
+.silence-message.error { background: rgba(255,107,120,.08); color: #ffafb6; }
+.silence-status { margin-top: 9px; padding: 9px; border: 1px solid #31442f; border-radius: 8px; background: rgba(17,29,18,.75); }
+.silence-status > div { display: flex; justify-content: space-between; gap: 8px; color: #adcca2; font-size: 7px; }
+.silence-status progress { width: 100%; height: 5px; margin-top: 6px; accent-color: var(--primary); }
+.silence-review { margin-top: 9px; padding: 9px; border: 1px solid #3d5638; border-radius: 9px; background: #101a12; }
+.silence-review-head, .silence-total { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.silence-review-head strong { color: #dff1d8; font-size: 9px; }
+.silence-review-head span { color: #89a981; font-size: 7px; }
+.silence-list { max-height: 150px; margin-top: 7px; overflow-y: auto; border-top: 1px solid rgba(255,255,255,.06); }
+.silence-candidate { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 5px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.silence-candidate label { min-width: 0; display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.silence-candidate input { width: 12px; height: 12px; margin: 0; accent-color: var(--primary); }
+.silence-candidate label span { min-width: 0; display: block; }
+.silence-candidate strong, .silence-candidate small { display: block; }
+.silence-candidate strong { color: #c9dfc1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 7px; font-weight: 600; }
+.silence-candidate small { margin-top: 2px; color: #73856e; font-size: 6px; }
+.silence-occurrences { max-width: 72px; display: flex; justify-content: flex-end; gap: 3px; flex-wrap: wrap; }
+.silence-section .silence-candidate button { width: 21px; height: 21px; justify-content: center; margin: 0; padding: 0; }
+.silence-total { padding: 8px 0 1px; color: #91a58b; font-size: 7px; }
+.silence-total strong { color: var(--primary); font-size: 9px; }
+.silence-section .proposal-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 5px; }
+.silence-section .proposal-actions button { justify-content: center; margin-top: 6px; }
+.silence-section .proposal-actions .apply { border-color: var(--primary); background: var(--primary); color: #0a1207; font-weight: 850; }

@@ -41,6 +41,10 @@
     animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
     sttJob: { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false },
     sttProposal: null, sttPollTimer: 0,
+    silence: {
+      analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
+      thresholdDb: -40, minimumDuration: 0.6, padding: 0.12, candidates: [],
+    },
   };
 
   function recalculate(project) {
@@ -341,6 +345,15 @@
     const text = state.selection?.kind === 'text' ? state.project.texts.find((item) => item.id === state.selection.id) : null;
     const sttAsset = getTranscribableAsset();
     const sttProposal = state.sttProposal;
+    const silence = state.silence;
+    const silenceHasBoundAsset = silence.analyzing || silence.candidates.length > 0;
+    const silenceAsset = silenceHasBoundAsset
+      ? state.project.assets.find((item) => item.id === silence.assetId)
+      : sttAsset;
+    const selectedSilences = silence.candidates.filter((candidate) => candidate.selected);
+    const candidateTimelineRemovals = silence.candidates.map((candidate) => timelineRemovalsForSilences(silence.assetId, [candidate]));
+    const selectedTimelineRemovals = timelineRemovalsForSilences(silence.assetId, selectedSilences);
+    const selectedSilenceDuration = selectedTimelineRemovals.reduce((total, range) => total + range.end - range.start, 0);
     const sttRequiresServer = location.protocol === 'file:';
     const sttStatusLabel = {
       idle: 'STT', uploading: '업로드', queued: '대기', processing: '분석 중',
@@ -353,7 +366,8 @@
       ${text ? `<section class="property-section"><div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
-      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}<button disabled>침묵 구간 감지 <span>다음 단계</span></button><button disabled>세로 자동 리프레임 <span>준비 중</span></button></section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
+      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}<button disabled>세로 자동 리프레임 <span>준비 중</span></button></section>
+      <section class="property-section silence-section"><div class="ai-title"><span>∿</span><div><h3>침묵 구간 감지</h3><small>${silenceAsset ? `${silenceHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(silenceAsset.name)}` : silenceHasBoundAsset ? '분석 대상이 삭제됨' : '영상 또는 오디오 필요'}</small></div></div><div class="field-grid silence-settings"><label class="field"><span>임계값 dB</span><input data-silence-field="thresholdDb" type="number" min="-80" max="-5" step="1" value="${silence.thresholdDb}" ${silence.analyzing ? 'disabled' : ''}></label><label class="field"><span>최소 길이 초</span><input data-silence-field="minimumDuration" type="number" min="0.1" max="10" step="0.1" value="${silence.minimumDuration}" ${silence.analyzing ? 'disabled' : ''}></label></div><label class="field"><span>음성 여백 초 <b>${silence.padding.toFixed(2)}</b></span><input data-silence-field="padding" type="range" min="0" max="1" step="0.01" value="${silence.padding}" ${silence.analyzing ? 'disabled' : ''}></label><button id="analyzeSilenceButton" class="silence-analyze" ${!sttAsset || silence.analyzing || silence.candidates.length ? 'disabled' : ''}>${silence.analyzing ? '오디오 분석 중…' : silence.candidates.length ? '후보 검토 중' : '침묵 구간 분석'} <span>${silence.thresholdDb} dB</span></button>${silence.analyzing ? `<div class="silence-status"><div><span>${escapeHtml(silence.message)}</span><b>${Math.round(silence.progress * 100)}%</b></div><progress value="${silence.progress}" max="1"></progress></div>` : silence.message ? `<p class="silence-message ${silence.status === 'failed' ? 'error' : ''}">${escapeHtml(silence.message)}</p>` : ''}${silence.candidates.length ? `<div class="silence-review"><div class="silence-review-head"><strong>삭제 후보 ${silence.candidates.length}개</strong><span>${selectedSilences.length}개 선택</span></div><div class="silence-list">${silence.candidates.map((candidate, index) => { const occurrences = candidateTimelineRemovals[index]; const occurrenceDuration = occurrences.reduce((total, range) => total + range.end - range.start, 0); return `<div class="silence-candidate"><label><input type="checkbox" data-silence-candidate="${index}" ${candidate.selected ? 'checked' : ''} ${occurrences.length ? '' : 'disabled'}><span><strong>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)}</strong><small>${occurrences.length ? `타임라인 ${occurrences.length}곳 · 실제 ${occurrenceDuration.toFixed(2)}초` : '현재 타임라인에 적용 구간 없음'}</small></span></label><div class="silence-occurrences">${occurrences.map((range, occurrenceIndex) => `<button type="button" data-preview-silence="${index}" data-preview-occurrence="${occurrenceIndex}" title="${formatTime(range.start, true)}–${formatTime(range.end, true)}로 이동">${occurrenceIndex + 1}</button>`).join('')}</div></div>`; }).join('')}</div><div class="silence-total"><span>타임라인 ${selectedTimelineRemovals.length}개 구간</span><strong>${selectedSilenceDuration.toFixed(2)}초</strong></div><div class="proposal-actions"><button id="clearSilenceButton">취소</button><button id="applySilenceButton" class="apply" ${selectedTimelineRemovals.length && silenceAsset ? '' : 'disabled'}>리플 삭제 적용</button></div></div>` : ''}</section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
   }
 
   function renderTimeline() {
@@ -412,8 +426,16 @@
 
   async function removeAsset(id) {
     await removeBlob(id).catch(() => undefined);
+    const invalidatesSilence = state.silence.assetId === id;
     commit((project) => ({ ...project, assets: project.assets.filter((asset) => asset.id !== id), clips: project.clips.filter((clip) => clip.assetId !== id) }));
     state.selection = null;
+    if (invalidatesSilence) {
+      state.silence = {
+        ...state.silence, analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', candidates: [],
+        analysisVersion: state.silence.analysisVersion + 1,
+      };
+    }
+    renderAll();
   }
 
   function splitSelected() {
@@ -671,6 +693,292 @@
     renderSttState({ active: false, status: 'idle', progress: 0, message: 'AI 자막 제안을 적용하지 않았습니다.', id: '' });
   }
 
+  function renderSilenceState(patch) {
+    state.silence = { ...state.silence, ...patch };
+    renderInspector();
+  }
+
+  function waitForAnalysisTurn() {
+    return new Promise((resolve) => {
+      let settled = false;
+      let frameId = 0;
+      let timerId = 0;
+      const complete = () => {
+        if (settled) return;
+        settled = true;
+        cancelAnimationFrame(frameId);
+        clearTimeout(timerId);
+        resolve();
+      };
+      frameId = requestAnimationFrame(complete);
+      timerId = window.setTimeout(complete, 50);
+    });
+  }
+
+  async function detectSilenceCandidates(audioBuffer, options, onProgress, isCancelled) {
+    const { thresholdDb, minimumDuration, padding } = options;
+    const threshold = 10 ** (thresholdDb / 20);
+    const frameDuration = 0.025;
+    const frameSize = Math.max(1, Math.round(audioBuffer.sampleRate * frameDuration));
+    const sampleStride = Math.max(1, Math.floor(audioBuffer.sampleRate / 8000));
+    const frameCount = Math.ceil(audioBuffer.length / frameSize);
+    const channels = Array.from({ length: audioBuffer.numberOfChannels }, (_, index) => audioBuffer.getChannelData(index));
+    const rawRanges = [];
+    let silentStart = null;
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+      const startSample = frameIndex * frameSize;
+      const endSample = Math.min(audioBuffer.length, startSample + frameSize);
+      let squaredTotal = 0;
+      let sampleCount = 0;
+      for (const channel of channels) {
+        for (let sample = startSample; sample < endSample; sample += sampleStride) {
+          squaredTotal += channel[sample] * channel[sample];
+          sampleCount += 1;
+        }
+      }
+      const rms = sampleCount ? Math.sqrt(squaredTotal / sampleCount) : 0;
+      const frameStart = startSample / audioBuffer.sampleRate;
+      const frameEnd = endSample / audioBuffer.sampleRate;
+      if (rms <= threshold) {
+        if (silentStart === null) silentStart = frameStart;
+      } else if (silentStart !== null) {
+        rawRanges.push({ start: silentStart, end: frameStart });
+        silentStart = null;
+      }
+      if (frameIndex % 800 === 0) {
+        if (isCancelled()) {
+          const error = new Error('침묵 분석이 취소되었습니다.');
+          error.name = 'AbortError';
+          throw error;
+        }
+        onProgress(frameIndex / Math.max(1, frameCount));
+        await waitForAnalysisTurn();
+      }
+      if (frameIndex === frameCount - 1 && silentStart !== null) {
+        rawRanges.push({ start: silentStart, end: frameEnd });
+      }
+    }
+
+    return rawRanges
+      .filter((range) => range.end - range.start >= minimumDuration)
+      .map((range, index) => ({
+        id: `silence-${index}-${Math.round(range.start * 1000)}`,
+        start: range.start,
+        end: range.end,
+        removeStart: range.start + padding,
+        removeEnd: range.end - padding,
+        selected: range.end - range.start > padding * 2 + 0.04,
+      }))
+      .filter((range) => range.removeEnd - range.removeStart > 0.04);
+  }
+
+  async function analyzeSilence() {
+    const asset = getTranscribableAsset();
+    if (!asset) {
+      renderSilenceState({ status: 'failed', message: '먼저 영상 또는 오디오 파일을 추가하세요.' });
+      return;
+    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      renderSilenceState({ status: 'failed', message: '이 브라우저는 오디오 분석을 지원하지 않습니다.' });
+      return;
+    }
+    const analysisVersion = state.silence.analysisVersion + 1;
+    const options = {
+      thresholdDb: state.silence.thresholdDb,
+      minimumDuration: state.silence.minimumDuration,
+      padding: state.silence.padding,
+    };
+    renderSilenceState({
+      analyzing: true, status: 'loading', progress: 0.04, message: `${asset.name} 오디오를 준비하고 있습니다.`,
+      assetId: asset.id, analysisVersion, candidates: [],
+    });
+    let audioContext = null;
+    let lastRenderedProgressStep = -1;
+    const isCancelled = () => state.silence.analysisVersion !== analysisVersion;
+    try {
+      audioContext = new AudioContextClass();
+      const blob = await loadBlob(asset.id);
+      if (isCancelled()) return;
+      if (!blob) throw new Error('원본 미디어를 로컬 저장소에서 찾을 수 없습니다.');
+      const audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
+      if (isCancelled()) return;
+      renderSilenceState({ status: 'analyzing', progress: 0.12, message: 'RMS 음량을 분석하고 있습니다.' });
+      const candidates = await detectSilenceCandidates(audioBuffer, options, (progress) => {
+        if (isCancelled()) return;
+        state.silence.progress = 0.12 + progress * 0.82;
+        const progressStep = Math.floor(progress * 5);
+        if (progressStep > lastRenderedProgressStep) {
+          lastRenderedProgressStep = progressStep;
+          renderInspector();
+        }
+      }, isCancelled);
+      if (isCancelled()) return;
+      renderSilenceState({
+        analyzing: false, status: 'completed', progress: 1, candidates,
+        message: candidates.length
+          ? `침묵 후보 ${candidates.length}개를 찾았습니다. 삭제할 구간을 검토하세요.`
+          : '현재 설정에 맞는 침묵 구간을 찾지 못했습니다.',
+      });
+    } catch (reason) {
+      if (isCancelled()) return;
+      renderSilenceState({
+        analyzing: false, status: 'failed', progress: 1, candidates: [],
+        message: reason instanceof Error ? `오디오 분석 실패: ${reason.message}` : '오디오를 분석하지 못했습니다.',
+      });
+    } finally {
+      if (audioContext) await audioContext.close().catch(() => undefined);
+      if (!isCancelled() && state.silence.analyzing) {
+        renderSilenceState({ analyzing: false, status: 'failed', progress: 1, message: '오디오 분석이 예기치 않게 종료되었습니다.' });
+      }
+    }
+  }
+
+  function mergeTimeRanges(ranges) {
+    return ranges
+      .filter((range) => range.end - range.start > 0.001)
+      .sort((first, second) => first.start - second.start)
+      .reduce((merged, range) => {
+        const previous = merged.at(-1);
+        if (previous && range.start <= previous.end + 0.001) previous.end = Math.max(previous.end, range.end);
+        else merged.push({ start: range.start, end: range.end });
+        return merged;
+      }, []);
+  }
+
+  function subtractTimeRanges(start, end, removals) {
+    const kept = [];
+    let cursor = start;
+    for (const removal of removals) {
+      if (removal.end <= cursor) continue;
+      if (removal.start >= end) break;
+      if (removal.start > cursor) kept.push({ start: cursor, end: Math.min(end, removal.start) });
+      cursor = Math.max(cursor, Math.min(end, removal.end));
+      if (cursor >= end) break;
+    }
+    if (cursor < end) kept.push({ start: cursor, end });
+    return kept.filter((range) => range.end - range.start > 0.001);
+  }
+
+  function mapTimeAfterRemovals(time, removals) {
+    let removedBefore = 0;
+    for (const removal of removals) {
+      if (time >= removal.end) {
+        removedBefore += removal.end - removal.start;
+        continue;
+      }
+      if (time > removal.start) return removal.start - removedBefore;
+      break;
+    }
+    return time - removedBefore;
+  }
+
+  function timelineRemovalsForSilences(assetId, candidates) {
+    const sourceRanges = candidates.map((candidate) => ({ start: candidate.removeStart, end: candidate.removeEnd }));
+    const timelineRanges = state.project.clips
+      .filter((clip) => clip.assetId === assetId)
+      .flatMap((clip) => sourceRanges.flatMap((range) => {
+        const sourceStart = Math.max(clip.sourceStart, range.start);
+        const sourceEnd = Math.min(clip.sourceEnd, range.end);
+        if (sourceEnd - sourceStart <= 0.001) return [];
+        return [{
+          start: clip.timelineStart + sourceStart - clip.sourceStart,
+          end: clip.timelineStart + sourceEnd - clip.sourceStart,
+        }];
+      }));
+    return mergeTimeRanges(timelineRanges);
+  }
+
+  function previewSilenceCandidate(index, occurrenceIndex = 0) {
+    const candidate = state.silence.candidates[index];
+    if (!candidate) return;
+    const occurrences = timelineRemovalsForSilences(state.silence.assetId, [candidate]);
+    const occurrence = occurrences[occurrenceIndex];
+    if (!occurrence) return;
+    seek(occurrence.start);
+  }
+
+  function toggleSilenceCandidate(index, selected) {
+    const candidate = state.silence.candidates[index];
+    if (!candidate) return;
+    candidate.selected = selected;
+    renderInspector();
+  }
+
+  function clearSilenceCandidates() {
+    renderSilenceState({
+      analyzing: false, status: 'idle', progress: 0, message: '', assetId: '', candidates: [],
+      analysisVersion: state.silence.analysisVersion + 1,
+    });
+  }
+
+  function applySilenceRemoval() {
+    const analysisAsset = state.project.assets.find((asset) => asset.id === state.silence.assetId);
+    const candidates = state.silence.candidates.filter((candidate) => candidate.selected);
+    const removals = timelineRemovalsForSilences(state.silence.assetId, candidates);
+    if (!analysisAsset) {
+      clearSilenceCandidates();
+      renderSilenceState({ status: 'failed', message: '분석한 미디어가 삭제되었습니다. 다른 미디어를 다시 분석하세요.' });
+      return;
+    }
+    if (!candidates.length || !removals.length) {
+      renderSilenceState({ message: '타임라인에서 제거할 침묵 후보를 선택하세요.' });
+      return;
+    }
+    const removedDuration = removals.reduce((total, range) => total + range.end - range.start, 0);
+    const firstRemovalStart = removals[0].start;
+    commit((project) => {
+      project.clips = project.clips.flatMap((clip) => {
+        const clipStart = clip.timelineStart;
+        const clipEnd = clip.timelineStart + clip.sourceEnd - clip.sourceStart;
+        return subtractTimeRanges(clipStart, clipEnd, removals).map((range, index) => {
+          return {
+            ...clip,
+            id: index === 0 ? clip.id : uid(),
+            timelineStart: mapTimeAfterRemovals(range.start, removals),
+            sourceStart: clip.sourceStart + range.start - clipStart,
+            sourceEnd: clip.sourceStart + range.end - clipStart,
+          };
+        });
+      });
+      project.texts = project.texts.flatMap((text) => {
+        const kept = subtractTimeRanges(text.start, text.end, removals);
+        if (!kept.length) return [];
+        return kept.map((range, index) => ({
+          ...text,
+          id: index === 0 ? text.id : uid(),
+          start: mapTimeAfterRemovals(range.start, removals),
+          end: mapTimeAfterRemovals(range.end, removals),
+        }));
+      });
+      return project;
+    });
+    state.playhead = mapTimeAfterRemovals(firstRemovalStart, removals);
+    state.selection = null;
+    state.silence = {
+      ...state.silence, analyzing: false, status: 'applied', progress: 1, candidates: [],
+      message: `${removals.length}개 구간, 총 ${removedDuration.toFixed(2)}초를 리플 삭제했습니다. Undo로 복원할 수 있습니다.`,
+    };
+    renderAll();
+  }
+
+  function updateSilenceSetting(field, value) {
+    const limits = {
+      thresholdDb: [-80, -5], minimumDuration: [0.1, 10], padding: [0, 2],
+    };
+    const [minimum, maximum] = limits[field] || [0, 1];
+    const numericValue = clamp(Number(value), minimum, maximum);
+    if (!Number.isFinite(numericValue)) return;
+    const hadReview = state.silence.analyzing || state.silence.candidates.length > 0;
+    state.silence = {
+      ...state.silence, [field]: numericValue, analyzing: false, status: 'idle', progress: 0, assetId: '', candidates: [],
+      analysisVersion: state.silence.analysisVersion + 1,
+      message: hadReview ? '설정이 변경되었습니다. 다시 분석하세요.' : '',
+    };
+    renderInspector();
+  }
+
   function addText() {
     const id = uid();
     commit((project) => { project.texts.push({ id, role: 'text', text: '텍스트를 입력하세요', start: state.playhead, end: Math.min(project.duration, state.playhead + 4), x: 50, y: 76, fontSize: 56, fontWeight: 800, color: '#ffffff', background: '#00000099', align: 'center' }); return project; });
@@ -833,9 +1141,14 @@
     timeline.ondragover=(event)=>event.preventDefault();timeline.ondrop=(event)=>{const target=event.target.closest('[data-select-clip]');if(!target||!state.draggedClip)return;const sourceId=state.draggedClip,targetId=target.dataset.selectClip;commit((project)=>{const source=project.clips.find((c)=>c.id===sourceId),destination=project.clips.find((c)=>c.id===targetId);if(!source||!destination||source.trackId!==destination.trackId)return project;const ordered=project.clips.filter((c)=>c.trackId===source.trackId).sort((a,b)=>a.timelineStart-b.timelineStart);const from=ordered.findIndex((c)=>c.id===sourceId),to=ordered.findIndex((c)=>c.id===targetId);ordered.splice(to,0,ordered.splice(from,1)[0]);let cursor=0;ordered.forEach((c)=>{c.timelineStart=cursor;cursor+=c.sourceEnd-c.sourceStart;});return project;});state.draggedClip='';};
     timeline.onpointerdown=(event)=>{const handle=event.target.closest('[data-trim]');if(!handle)return;event.preventDefault();event.stopPropagation();const clip=state.project.clips.find((item)=>item.id===handle.dataset.clip);if(!clip)return;const startX=event.clientX,startSource=clip.sourceStart,endSource=clip.sourceEnd,startTimeline=clip.timelineStart;window.addEventListener('pointerup',(up)=>{const delta=(up.clientX-startX)/state.zoom;commit((project)=>{const current=project.clips.find((item)=>item.id===clip.id);if(!current)return project;if(handle.dataset.trim==='start'){const bounded=Math.max(-startSource,Math.min(endSource-startSource-.1,delta));current.sourceStart=startSource+bounded;current.timelineStart=startTimeline+bounded;}else current.sourceEnd=Math.max(startSource+.1,endSource+delta);return project;});},{once:true});};
 
-    document.getElementById('inspectorContent').onchange=(event)=>handleInspectorChange(event.target);
+    document.getElementById('inspectorContent').onchange=(event)=>{
+      const target = event.target;
+      if (target.dataset.silenceCandidate !== undefined) toggleSilenceCandidate(Number(target.dataset.silenceCandidate), target.checked);
+      else if (target.dataset.silenceField) updateSilenceSetting(target.dataset.silenceField, target.value);
+      else handleInspectorChange(target);
+    };
     document.getElementById('inspectorContent').oninput=(event)=>{if(event.target.type==='range'||event.target.type==='color')handleInspectorChange(event.target);};
-    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();};
+    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.dataset.previewSilence !== undefined)previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));else if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();else if(target.id==='analyzeSilenceButton')void analyzeSilence();else if(target.id==='applySilenceButton')applySilenceRemoval();else if(target.id==='clearSilenceButton')clearSilenceCandidates();};
     document.getElementById('modalRoot').onclick=async(event)=>{if(event.target.id==='closeModal'){state.exportOpen=false;renderModal();}if(event.target.id==='startExport'){const quality=document.getElementById('exportQuality').value;state.playing=false;syncPreview();try{const blob=await exportVideo(quality);downloadBlob(blob,`${safeName(state.project.title)}.webm`);state.exportProgress={active:false,progress:1,status:'완료'};state.exportOpen=false;renderModal();}catch(reason){state.exportProgress={active:false,progress:0,status:''};renderModal();const error=document.getElementById('exportError');error.textContent=reason.message||'내보내기에 실패했습니다.';error.hidden=false;}}};
 
     window.addEventListener('keydown',(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}else if(event.code==='Space'){event.preventDefault();togglePlayback();}});
