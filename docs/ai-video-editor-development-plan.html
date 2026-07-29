@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="CapCut과 같은 AI 기반 동영상 편집기의 아키텍처 및 28주 단계별 개발 계획">
+  <title>AI 기반 동영상 편집기 — 아키텍처 및 개발 계획</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: #0e1b2e;
+      --panel-2: #13243b;
+      --ink: #eaf1ff;
+      --muted: #9fb0c9;
+      --line: #243955;
+      --primary: #7c8cff;
+      --primary-2: #55d6be;
+      --accent: #ffbd59;
+      --danger: #ff7285;
+      --white: #fff;
+      --paper: #f6f8fc;
+      --paper-ink: #172033;
+      --radius: 18px;
+      --shadow: 0 20px 60px rgba(0, 0, 0, .24);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.65;
+      word-break: keep-all;
+    }
+    a { color: inherit; }
+    button { font: inherit; }
+    svg text { font-family: Pretendard, "Noto Sans KR", system-ui, sans-serif; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px max(20px, calc((100vw - 1180px) / 2));
+      background: rgba(7, 17, 31, .88);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(14px);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; }
+    .brand-mark {
+      width: 34px; height: 34px; border-radius: 10px;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, var(--primary), var(--primary-2));
+      color: #07111f;
+    }
+    .actions { display: flex; gap: 8px; }
+    .button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 13px;
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .button.primary { border-color: transparent; background: var(--primary); color: #07111f; }
+    .button:hover { filter: brightness(1.08); }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 90px 24px 72px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      background:
+        radial-gradient(circle at 78% 20%, rgba(85,214,190,.16), transparent 28%),
+        radial-gradient(circle at 20% 5%, rgba(124,140,255,.22), transparent 34%);
+    }
+    .hero::after {
+      content: "";
+      position: absolute; inset: 0;
+      background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: linear-gradient(to bottom, black, transparent);
+      pointer-events: none;
+    }
+    .hero-inner { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 7px 11px; border: 1px solid rgba(124,140,255,.45);
+      border-radius: 999px; color: #c8d0ff; background: rgba(124,140,255,.08);
+      font-size: 13px; font-weight: 800; letter-spacing: .04em;
+    }
+    h1 { max-width: 900px; margin: 20px 0 18px; font-size: clamp(38px, 7vw, 76px); line-height: 1.08; letter-spacing: -.055em; }
+    .gradient-text { background: linear-gradient(90deg, #aab5ff, #55d6be); -webkit-background-clip: text; color: transparent; }
+    .hero p { max-width: 760px; margin: 0; color: var(--muted); font-size: clamp(17px, 2vw, 21px); }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .hero-meta span { padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(14,27,46,.75); font-size: 14px; }
+
+    .layout { max-width: 1180px; margin: 0 auto; padding: 48px 24px 100px; }
+    .toc {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+      margin-bottom: 58px;
+    }
+    .toc a { text-decoration: none; padding: 13px 15px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); background: rgba(14,27,46,.65); }
+    .toc a:hover { border-color: var(--primary); color: var(--ink); }
+
+    section { scroll-margin-top: 74px; margin: 74px 0; }
+    .section-kicker { color: var(--primary-2); font-size: 13px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+    h2 { margin: 7px 0 12px; font-size: clamp(28px, 4vw, 44px); line-height: 1.2; letter-spacing: -.035em; }
+    h3 { margin: 0 0 9px; font-size: 21px; line-height: 1.3; }
+    h4 { margin: 0 0 6px; font-size: 16px; }
+    .lead { max-width: 820px; color: var(--muted); font-size: 17px; margin: 0 0 28px; }
+
+    .grid { display: grid; gap: 16px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card {
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(19,36,59,.92), rgba(11,23,40,.92));
+      box-shadow: var(--shadow);
+    }
+    .card p { margin: 0; color: var(--muted); }
+    .number {
+      width: 36px; height: 36px; display: grid; place-items: center;
+      margin-bottom: 16px; border-radius: 11px;
+      background: rgba(124,140,255,.14); color: #b7c0ff; font-weight: 900;
+    }
+    .metric { min-height: 152px; }
+    .metric strong { display: block; margin: 8px 0 4px; font-size: 34px; line-height: 1; color: var(--white); }
+    .metric small { color: var(--muted); }
+    .tag { display: inline-block; padding: 4px 8px; border-radius: 999px; background: rgba(85,214,190,.12); color: #7de8d4; font-size: 12px; font-weight: 800; }
+    .tag.orange { background: rgba(255,189,89,.12); color: #ffd087; }
+    .tag.purple { background: rgba(124,140,255,.14); color: #b9c1ff; }
+
+    .diagram {
+      overflow-x: auto;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #091526;
+      box-shadow: var(--shadow);
+    }
+    .diagram svg { display: block; width: 100%; min-width: 900px; height: auto; }
+    .diagram-caption { margin: 12px 4px 0; color: var(--muted); font-size: 13px; }
+
+    .callout {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 18px 20px; margin: 20px 0;
+      border-left: 4px solid var(--primary-2);
+      border-radius: 0 14px 14px 0;
+      background: rgba(85,214,190,.08);
+    }
+    .callout strong { color: #8cebd9; }
+
+    .tech-table, .phase-table {
+      width: 100%; border-collapse: collapse; overflow: hidden;
+      border: 1px solid var(--line); border-radius: 16px;
+      background: rgba(14,27,46,.78);
+    }
+    .table-wrap { overflow-x: auto; border-radius: 16px; }
+    th, td { padding: 13px 15px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { background: #13243b; color: #cdd6ea; font-size: 13px; letter-spacing: .03em; }
+    td { color: var(--muted); }
+    tr:last-child td { border-bottom: 0; }
+    td strong { color: var(--ink); }
+
+    .mockup {
+      overflow: hidden;
+      border: 1px solid #334664;
+      border-radius: 20px;
+      background: #090f1a;
+      box-shadow: 0 28px 80px rgba(0,0,0,.42);
+    }
+    .windowbar { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid #273750; background: #101b2b; }
+    .dots { display: flex; gap: 6px; }
+    .dots i { width: 9px; height: 9px; border-radius: 50%; background: #ff7285; }
+    .dots i:nth-child(2) { background: #ffbd59; }
+    .dots i:nth-child(3) { background: #55d6be; }
+    .window-title { color: #aab6ca; font-size: 12px; }
+    .export { padding: 6px 10px; border-radius: 7px; background: var(--primary); color: #07111f; font-size: 11px; font-weight: 900; }
+    .editor-body { display: grid; grid-template-columns: 170px 1fr 190px; min-height: 430px; }
+    .media-panel, .property-panel { padding: 12px; background: #0d1726; }
+    .media-panel { border-right: 1px solid #273750; }
+    .property-panel { border-left: 1px solid #273750; }
+    .panel-label { margin-bottom: 10px; color: #d7dff0; font-size: 11px; font-weight: 800; }
+    .upload-box { display: grid; place-items: center; height: 74px; border: 1px dashed #536682; border-radius: 10px; color: #7f90aa; font-size: 10px; }
+    .asset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+    .asset { height: 48px; border-radius: 7px; background: linear-gradient(135deg, #283f61, #15263f); }
+    .center-area { display: grid; grid-template-rows: 1fr 170px; min-width: 0; }
+    .preview { position: relative; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at center, #253854, #121d2e 60%); }
+    .video-frame { position: relative; width: 180px; aspect-ratio: 9/16; border: 1px solid #71839e; border-radius: 4px; background: linear-gradient(160deg, #4f637d, #17263b 66%); overflow: hidden; }
+    .subject { position: absolute; width: 72px; height: 116px; left: 54px; bottom: 46px; border-radius: 48% 48% 24% 24%; background: linear-gradient(#b8c3d3 30%, #7c8cff 31%); opacity: .92; }
+    .caption { position: absolute; left: 16px; right: 16px; bottom: 24px; text-align: center; font-size: 11px; font-weight: 900; color: white; text-shadow: 0 2px 4px black; }
+    .safe-area { position: absolute; inset: 15px; border: 1px dashed rgba(255,255,255,.28); }
+    .timeline { padding: 12px; border-top: 1px solid #273750; background: #0b1421; overflow: hidden; }
+    .ruler { height: 18px; margin-left: 40px; border-top: 1px solid #4b5f7c; color: #778aa6; font-size: 8px; word-spacing: 42px; }
+    .track { display: grid; grid-template-columns: 34px 1fr; gap: 7px; align-items: center; margin: 7px 0; }
+    .track-name { color: #7d8da5; font-size: 8px; }
+    .clips { display: flex; gap: 4px; height: 28px; }
+    .clip { border: 1px solid #6374dc; border-radius: 5px; background: rgba(124,140,255,.3); }
+    .clip.green { border-color: #46ac99; background: rgba(85,214,190,.25); }
+    .clip.yellow { border-color: #c7913f; background: rgba(255,189,89,.23); }
+    .field { margin: 9px 0; }
+    .field span { display: block; margin-bottom: 3px; color: #788ba6; font-size: 9px; }
+    .field div { height: 25px; padding: 5px 7px; border: 1px solid #2b3d57; border-radius: 6px; color: #b9c4d6; font-size: 9px; }
+    .ai-box { margin-top: 16px; padding: 10px; border: 1px solid rgba(124,140,255,.5); border-radius: 9px; background: rgba(124,140,255,.09); color: #bfc7ff; font-size: 9px; }
+
+    .pipeline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+    .pipeline span { padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: #c8d3e6; font-size: 13px; }
+    .pipeline b { color: var(--primary-2); }
+
+    .roadmap { position: relative; margin-top: 34px; }
+    .roadmap::before { content: ""; position: absolute; top: 0; bottom: 0; left: 85px; width: 2px; background: linear-gradient(var(--primary), var(--primary-2)); }
+    .phase { display: grid; grid-template-columns: 70px 1fr; gap: 32px; position: relative; margin: 0 0 26px; }
+    .phase-week { padding-top: 18px; text-align: right; color: #aeb9ce; font-size: 13px; font-weight: 800; }
+    .phase-content { position: relative; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: rgba(14,27,46,.85); }
+    .phase-content::before { content: ""; position: absolute; left: -39px; top: 24px; width: 12px; height: 12px; border: 4px solid var(--bg); border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+    .phase:nth-child(2n) .phase-content::before { background: var(--primary-2); box-shadow: 0 0 0 2px var(--primary-2); }
+    .phase-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 12px; }
+    .phase-head h3 { margin: 0; }
+    .phase ul, .compact-list { margin: 8px 0 0; padding-left: 19px; color: var(--muted); }
+    .phase li, .compact-list li { margin: 4px 0; }
+    .done { margin-top: 14px; padding: 11px 13px; border-radius: 10px; background: rgba(85,214,190,.08); color: #bde9e0; font-size: 13px; }
+
+    .priority { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .priority .yes { border-top: 4px solid var(--primary-2); }
+    .priority .later { border-top: 4px solid var(--accent); }
+
+    .footer { padding: 38px 24px; border-top: 1px solid var(--line); color: var(--muted); text-align: center; font-size: 13px; }
+    .footer strong { color: var(--ink); }
+
+    @media (max-width: 900px) {
+      .toc, .grid-4 { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: 1fr 1fr; }
+      .editor-body { grid-template-columns: 130px 1fr; }
+      .property-panel { display: none; }
+    }
+    @media (max-width: 620px) {
+      body { word-break: normal; }
+      .topbar { padding: 9px 12px; }
+      .brand span { display: none; }
+      .hero { padding: 64px 18px 52px; }
+      .layout { padding: 30px 16px 72px; }
+      .toc, .grid-2, .grid-3, .grid-4, .priority { grid-template-columns: 1fr; }
+      .toc { gap: 7px; }
+      section { margin: 56px 0; }
+      .editor-body { grid-template-columns: 1fr; }
+      .media-panel, .property-panel { display: none; }
+      .center-area { grid-template-rows: 300px 165px; }
+      .roadmap::before { left: 9px; }
+      .phase { grid-template-columns: 1fr; padding-left: 28px; gap: 4px; }
+      .phase-week { text-align: left; padding-top: 0; }
+      .phase-content::before { left: -25px; top: 25px; }
+      .actions .button:first-child { display: none; }
+    }
+
+    @media print {
+      :root { --ink: #172033; --muted: #4f5b6e; --line: #d7deea; --panel: #fff; --panel-2: #f4f6fa; }
+      body { background: white; color: #172033; font-size: 10.5pt; }
+      .topbar { display: none; }
+      .hero { padding: 42px 0; color: #172033; background: white; border-bottom: 2px solid #172033; }
+      .hero::after { display: none; }
+      .gradient-text { color: #172033; -webkit-text-fill-color: #172033; }
+      .hero p, .lead, .card p, td, .compact-list, .phase ul { color: #4f5b6e; }
+      .hero-meta span, .card, .phase-content, .diagram, .tech-table, .phase-table { background: white; box-shadow: none; }
+      .layout { max-width: none; padding: 20px 0; }
+      .toc { display: none; }
+      section { margin: 36px 0; break-inside: avoid; }
+      .card, .phase-content, .diagram, .mockup, table { break-inside: avoid; }
+      .diagram { background: #f8faff; }
+      .roadmap::before { background: #8290a7; }
+      .footer { color: #4f5b6e; }
+      @page { size: A4; margin: 14mm; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">AI</div><span>Video Editor Blueprint</span></div>
+    <div class="actions">
+      <button class="button" type="button" onclick="window.print()">인쇄 / PDF 저장</button>
+      <button class="button primary" type="button" onclick="downloadDocument()">HTML 다운로드</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" id="overview">
+      <div class="hero-inner">
+        <div class="eyebrow">PRODUCT · ARCHITECTURE · ROADMAP</div>
+        <h1>AI 기반 동영상 편집기<br><span class="gradient-text">아키텍처 및 개발 계획</span></h1>
+        <p>CapCut 수준의 범용 편집기를 한 번에 복제하지 않고, 긴 영상을 자동 자막이 포함된 세로형 숏폼으로 빠르게 변환하는 제품부터 시작하는 실행 계획입니다.</p>
+        <div class="hero-meta">
+          <span>웹 우선</span><span>숏폼 중심</span><span>1080p 클라우드 렌더링</span><span>28주 베타 목표</span><span>6~7명 권장</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <nav class="toc" aria-label="문서 목차">
+        <a href="#summary">01. 핵심 요약</a>
+        <a href="#principles">02. 설계 원칙</a>
+        <a href="#architecture">03. 전체 아키텍처</a>
+        <a href="#screen">04. 화면 구성</a>
+        <a href="#media">05. 미디어·렌더링</a>
+        <a href="#ai">06. AI 파이프라인</a>
+        <a href="#roadmap">07. Phase 로드맵</a>
+        <a href="#operations">08. 팀·운영·KPI</a>
+      </nav>
+
+      <section id="summary">
+        <div class="section-kicker">Executive Summary</div>
+        <h2>한 문장으로 정의하는 제품</h2>
+        <p class="lead">사용자가 30분짜리 가로형 대화 영상을 업로드하면 AI가 세로형 숏폼 후보를 3개 이상 만들고, 사용자는 자막과 컷을 수정해 1080p MP4로 출력할 수 있는 웹 편집기입니다.</p>
+        <div class="grid grid-4">
+          <article class="card metric"><span class="tag purple">SCOPE</span><strong>10개</strong><small>첫 출시에 집중할 핵심 기능</small></article>
+          <article class="card metric"><span class="tag">SCHEDULE</span><strong>28주</strong><small>기술 검증부터 비공개 베타까지</small></article>
+          <article class="card metric"><span class="tag orange">TEAM</span><strong>6~7명</strong><small>FE 2, BE/Media 2, AI 1 중심</small></article>
+          <article class="card metric"><span class="tag purple">OUTPUT</span><strong>1080p</strong><small>숏폼 플랫폼별 MP4 출력</small></article>
+        </div>
+        <div class="callout"><div>✓</div><div><strong>핵심 전략:</strong> AI가 초안을 만들고 사용자가 수정하는 구조를 우선합니다. 고급 모션 그래픽, 4K/HDR, 실시간 공동 편집은 제품 적합성을 검증한 뒤 확장합니다.</div></div>
+      </section>
+
+      <section id="principles">
+        <div class="section-kicker">Architecture Principles</div>
+        <h2>복잡도를 통제하는 6가지 원칙</h2>
+        <div class="grid grid-3">
+          <article class="card"><div class="number">01</div><h3>비파괴 편집</h3><p>원본은 유지하고 컷, 자막, 위치, 효과를 프로젝트 JSON으로 저장합니다.</p></article>
+          <article class="card"><div class="number">02</div><h3>프록시 프리뷰</h3><p>브라우저는 저해상도 프록시로 빠르게 편집하고 최종 출력은 원본으로 처리합니다.</p></article>
+          <article class="card"><div class="number">03</div><h3>모듈형 모놀리스</h3><p>API는 하나로 시작하되 CPU/GPU 작업만 독립 워커로 분리합니다.</p></article>
+          <article class="card"><div class="number">04</div><h3>비동기 작업</h3><p>변환, 자막, AI 분석, 렌더링은 큐 기반 Job으로 실행하고 상태를 스트리밍합니다.</p></article>
+          <article class="card"><div class="number">05</div><h3>AI는 제안</h3><p>AI 결과는 미리보기와 승인을 거쳐 Timeline Patch로 적용하며 언제든 복구할 수 있습니다.</p></article>
+          <article class="card"><div class="number">06</div><h3>공통 렌더 명세</h3><p>브라우저 프리뷰와 서버 렌더러가 동일한 Render Instruction을 해석합니다.</p></article>
+        </div>
+      </section>
+
+      <section id="architecture">
+        <div class="section-kicker">System Architecture</div>
+        <h2>전체 시스템 모식도</h2>
+        <p class="lead">대화형 편집은 클라이언트에서, 신뢰성이 필요한 저장과 제어는 API에서, 무거운 처리는 비동기 워커에서 수행합니다.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 1160 740" role="img" aria-labelledby="architecture-title architecture-desc">
+            <title id="architecture-title">AI 동영상 편집기 전체 시스템 아키텍처</title>
+            <desc id="architecture-desc">웹 편집기, API 제어 영역, 데이터 저장소, 작업 큐, 미디어·AI·렌더링 워커의 연결 구조</desc>
+            <defs>
+              <linearGradient id="clientGrad" x1="0" x2="1"><stop stop-color="#283c75"/><stop offset="1" stop-color="#1d4e66"/></linearGradient>
+              <linearGradient id="apiGrad" x1="0" x2="1"><stop stop-color="#23375d"/><stop offset="1" stop-color="#243f53"/></linearGradient>
+              <linearGradient id="workerGrad" x1="0" x2="1"><stop stop-color="#24433f"/><stop offset="1" stop-color="#263d5c"/></linearGradient>
+              <filter id="shadow"><feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#000" flood-opacity=".28"/></filter>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#6f83a5"/></marker>
+              <style>
+                .box{stroke:#47617f;stroke-width:1.5;rx:14;filter:url(#shadow)}
+                .title{fill:#f1f5ff;font-size:19px;font-weight:800}
+                .sub{fill:#aab9d0;font-size:13px}
+                .mini{fill:#d8e0ef;font-size:13px;font-weight:700}
+                .edge{stroke:#6f83a5;stroke-width:2;fill:none;marker-end:url(#arrow)}
+                .dash{stroke-dasharray:7 6}
+              </style>
+            </defs>
+
+            <text x="30" y="34" class="sub">CLIENT EXPERIENCE</text>
+            <rect class="box" x="30" y="52" width="1100" height="140" fill="url(#clientGrad)"/>
+            <text x="60" y="84" class="title">Web Editor</text>
+            <g>
+              <rect x="60" y="105" width="175" height="58" rx="10" fill="#182844" stroke="#5c72a2"/><text x="147" y="130" text-anchor="middle" class="mini">Media Library</text><text x="147" y="149" text-anchor="middle" class="sub">Upload · Assets</text>
+              <rect x="250" y="105" width="175" height="58" rx="10" fill="#182844" stroke="#5c72a2"/><text x="337" y="130" text-anchor="middle" class="mini">Timeline Engine</text><text x="337" y="149" text-anchor="middle" class="sub">Trim · Split · Undo</text>
+              <rect x="440" y="105" width="175" height="58" rx="10" fill="#182844" stroke="#5c72a2"/><text x="527" y="130" text-anchor="middle" class="mini">Preview Engine</text><text x="527" y="149" text-anchor="middle" class="sub">WebCodecs · WebGL</text>
+              <rect x="630" y="105" width="175" height="58" rx="10" fill="#182844" stroke="#5c72a2"/><text x="717" y="130" text-anchor="middle" class="mini">Caption / AI</text><text x="717" y="149" text-anchor="middle" class="sub">Review · Apply</text>
+              <rect x="820" y="105" width="280" height="58" rx="10" fill="#182844" stroke="#5c72a2"/><text x="960" y="130" text-anchor="middle" class="mini">Editor State &amp; Autosave</text><text x="960" y="149" text-anchor="middle" class="sub">Command Log · IndexedDB · Revision</text>
+            </g>
+
+            <path class="edge" d="M580 192 L580 235"/><text x="598" y="219" class="sub">HTTPS · WebSocket/SSE</text>
+            <text x="30" y="246" class="sub">CONTROL PLANE</text>
+            <rect class="box" x="30" y="263" width="1100" height="126" fill="url(#apiGrad)"/>
+            <text x="60" y="296" class="title">API / Modular Monolith</text>
+            <text x="60" y="330" class="mini">Auth</text><text x="147" y="330" class="mini">Project</text><text x="247" y="330" class="mini">Asset</text><text x="330" y="330" class="mini">Timeline</text><text x="435" y="330" class="mini">AI Job</text><text x="526" y="330" class="mini">Render</text><text x="615" y="330" class="mini">Team</text><text x="700" y="330" class="mini">Billing</text><text x="795" y="330" class="mini">Template</text><text x="907" y="330" class="mini">Notification</text>
+            <text x="60" y="362" class="sub">인증·권한·프로젝트 버전·비동기 작업 상태·사용량·비용을 하나의 제어 영역에서 관리</text>
+
+            <path class="edge" d="M240 389 L240 445"/><path class="edge" d="M480 389 L480 445"/><path class="edge" d="M710 389 L710 445"/><path class="edge" d="M940 389 L940 445"/>
+            <text x="30" y="434" class="sub">DATA &amp; MESSAGING</text>
+            <rect class="box" x="30" y="451" width="220" height="96" fill="#15253b"/><text x="140" y="482" text-anchor="middle" class="title">PostgreSQL</text><text x="140" y="509" text-anchor="middle" class="sub">Metadata · Version</text><text x="140" y="530" text-anchor="middle" class="sub">Caption · Usage</text>
+            <rect class="box" x="270" y="451" width="220" height="96" fill="#15253b"/><text x="380" y="482" text-anchor="middle" class="title">Redis</text><text x="380" y="509" text-anchor="middle" class="sub">Cache · Lock</text><text x="380" y="530" text-anchor="middle" class="sub">Short-lived State</text>
+            <rect class="box" x="510" y="451" width="300" height="96" fill="#15253b"/><text x="660" y="482" text-anchor="middle" class="title">Object Storage + CDN</text><text x="660" y="509" text-anchor="middle" class="sub">Original · Proxy · Thumbnail</text><text x="660" y="530" text-anchor="middle" class="sub">Waveform · Render Output</text>
+            <rect class="box" x="830" y="451" width="300" height="96" fill="#15253b"/><text x="980" y="482" text-anchor="middle" class="title">Job Queue</text><text x="980" y="509" text-anchor="middle" class="sub">Transcode · AI · Render</text><text x="980" y="530" text-anchor="middle" class="sub">Retry · Priority · DLQ</text>
+
+            <path class="edge dash" d="M980 547 L980 595"/><path class="edge dash" d="M660 547 L660 595"/>
+            <text x="30" y="587" class="sub">ASYNC WORKERS</text>
+            <rect class="box" x="30" y="606" width="340" height="105" fill="url(#workerGrad)"/><text x="200" y="638" text-anchor="middle" class="title">Media Workers</text><text x="200" y="665" text-anchor="middle" class="sub">FFprobe · Proxy · Thumbnail</text><text x="200" y="686" text-anchor="middle" class="sub">Waveform · Audio Extraction</text>
+            <rect class="box" x="410" y="606" width="340" height="105" fill="url(#workerGrad)"/><text x="580" y="638" text-anchor="middle" class="title">AI Orchestrator / GPU</text><text x="580" y="665" text-anchor="middle" class="sub">STT · Silence · Reframe</text><text x="580" y="686" text-anchor="middle" class="sub">Background · Highlight</text>
+            <rect class="box" x="790" y="606" width="340" height="105" fill="url(#workerGrad)"/><text x="960" y="638" text-anchor="middle" class="title">Render Workers</text><text x="960" y="665" text-anchor="middle" class="sub">Timeline Compile · FFmpeg</text><text x="960" y="686" text-anchor="middle" class="sub">Composition · Encoding · QC</text>
+          </svg>
+          <figcaption class="diagram-caption">초기 배포 단위: Web App 1개, API 1개, Media/AI/Render 워커 3종. 트래픽과 비용 패턴이 확인된 뒤 필요한 부분만 독립 확장합니다.</figcaption>
+        </figure>
+
+        <h3 style="margin-top:28px">권장 기술 구성</h3>
+        <div class="table-wrap">
+          <table class="tech-table">
+            <thead><tr><th>영역</th><th>권장 기술</th><th>설계 이유</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Web Editor</strong></td><td>React/Next.js, TypeScript</td><td>복잡한 편집 상태를 타입 안정적으로 관리</td></tr>
+              <tr><td><strong>Preview</strong></td><td>WebCodecs, WebGL/Canvas, Web Audio</td><td>낮은 지연의 디코딩·합성·오디오 재생</td></tr>
+              <tr><td><strong>API</strong></td><td>NestJS 또는 FastAPI</td><td>모듈형 모놀리스와 비동기 Job API 구성</td></tr>
+              <tr><td><strong>Media</strong></td><td>FFmpeg/FFprobe</td><td>프록시, 메타데이터, 합성, 인코딩</td></tr>
+              <tr><td><strong>Data</strong></td><td>PostgreSQL, Redis, S3 호환 저장소</td><td>메타데이터와 대용량 바이너리 분리</td></tr>
+              <tr><td><strong>Queue</strong></td><td>SQS/RabbitMQ/Redis Queue</td><td>재시도, 우선순위, DLQ 기반의 안정적인 처리</td></tr>
+              <tr><td><strong>Observability</strong></td><td>OpenTelemetry + 로그·메트릭·에러 추적</td><td>영상별 처리 시간과 비용 추적</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="screen">
+        <div class="section-kicker">Product Screen</div>
+        <h2>편집기 화면 구성 예시</h2>
+        <p class="lead">기존 편집기의 익숙한 타임라인 구조를 유지하고, AI 결과는 우측 패널에서 검토·적용하는 방식입니다.</p>
+        <div class="mockup" role="img" aria-label="AI 동영상 편집기 화면 목업">
+          <div class="windowbar"><div class="dots"><i></i><i></i><i></i></div><div class="window-title">프로젝트 · 인터뷰 숏폼 01</div><div class="export">내보내기</div></div>
+          <div class="editor-body">
+            <aside class="media-panel"><div class="panel-label">미디어</div><div class="upload-box">+ 파일 업로드</div><div class="asset-grid"><div class="asset"></div><div class="asset"></div><div class="asset"></div><div class="asset"></div><div class="asset"></div><div class="asset"></div></div></aside>
+            <div class="center-area">
+              <div class="preview"><div class="video-frame"><div class="safe-area"></div><div class="subject"></div><div class="caption">AI가 숏폼 초안을 만들었습니다</div></div></div>
+              <div class="timeline"><div class="ruler">00:00 00:05 00:10 00:15</div><div class="track"><div class="track-name">VIDEO</div><div class="clips"><div class="clip" style="width:29%"></div><div class="clip" style="width:22%"></div><div class="clip" style="width:35%"></div></div></div><div class="track"><div class="track-name">CAPTION</div><div class="clips"><div class="clip green" style="width:18%"></div><div class="clip green" style="width:24%"></div><div class="clip green" style="width:20%"></div><div class="clip green" style="width:27%"></div></div></div><div class="track"><div class="track-name">AUDIO</div><div class="clips"><div class="clip yellow" style="width:92%"></div></div></div></div>
+            </div>
+            <aside class="property-panel"><div class="panel-label">속성 / AI 도우미</div><div class="field"><span>화면 비율</span><div>9:16 · Shorts</div></div><div class="field"><span>자막 스타일</span><div>Bold Highlight</div></div><div class="field"><span>오디오</span><div>음성 향상 72%</div></div><div class="ai-box"><strong>AI 제안 3개</strong><br><br>침묵 구간 4개 제거<br>얼굴 중심 리프레임<br>핵심 문장 강조<br><br>미리보기 후 적용 →</div></aside>
+          </div>
+        </div>
+        <div class="grid grid-3" style="margin-top:16px">
+          <article class="card"><h3>좌측: 미디어</h3><p>원본, 프록시, 이미지, 음악, 템플릿과 업로드 상태를 관리합니다.</p></article>
+          <article class="card"><h3>중앙: 프리뷰·타임라인</h3><p>직접 편집의 중심 영역으로 컷, 트림, 자막, 오디오를 조정합니다.</p></article>
+          <article class="card"><h3>우측: 속성·AI</h3><p>선택 요소의 속성과 AI 분석 결과를 미리보고 승인합니다.</p></article>
+        </div>
+      </section>
+
+      <section id="media">
+        <div class="section-kicker">Media &amp; Rendering</div>
+        <h2>업로드부터 최종 렌더링까지</h2>
+        <div class="grid grid-2">
+          <article class="card">
+            <span class="tag">UPLOAD PIPELINE</span><h3 style="margin-top:12px">미디어 처리</h3>
+            <div class="pipeline"><span>업로드 세션</span><b>→</b><span>직접 업로드</span><b>→</b><span>검증</span><b>→</b><span>프록시</span><b>→</b><span>READY</span></div>
+            <ul class="compact-list"><li>Signed Multipart URL로 API 병목 제거</li><li>코덱·크기·길이·손상 여부 검증</li><li>편집 프록시, 썸네일, 파형, STT 오디오 생성</li><li>실패 재시도와 중복 작업 방지</li></ul>
+          </article>
+          <article class="card">
+            <span class="tag orange">RENDER PIPELINE</span><h3 style="margin-top:12px">최종 출력</h3>
+            <div class="pipeline"><span>Project JSON</span><b>→</b><span>Compiler</span><b>→</b><span>Render IR</span><b>→</b><span>FFmpeg</span><b>→</b><span>QC</span></div>
+            <ul class="compact-list"><li>특정 프로젝트 revision을 고정해 재현성 확보</li><li>프리뷰와 서버가 같은 효과 명세 공유</li><li>준비·합성·인코딩·업로드 단계별 진행률</li><li>완료 파일 무결성 검사 후 CDN URL 발급</li></ul>
+          </article>
+        </div>
+        <div class="callout"><div>!</div><div><strong>중요 설계:</strong> 프로젝트 JSON을 FFmpeg 명령으로 직접 바꾸지 말고 Render Instruction 중간 계층을 둡니다. 편집 기능 확장과 렌더러 교체 시 결합도를 크게 낮출 수 있습니다.</div></div>
+      </section>
+
+      <section id="ai">
+        <div class="section-kicker">AI Architecture</div>
+        <h2>AI는 타임라인을 생성하는 보조 엔진</h2>
+        <p class="lead">각 AI 모델의 결과를 제품 공통 형식으로 정규화하고, 최종적으로 사용자가 검토할 Timeline Patch를 생성합니다.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 1160 330" role="img" aria-labelledby="ai-title ai-desc">
+            <title id="ai-title">AI 편집 처리 파이프라인</title><desc id="ai-desc">영상 입력에서 분석, 후보 생성, 검토, 타임라인 적용까지의 단계</desc>
+            <defs><marker id="aiArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#7c8cff"/></marker><linearGradient id="aiGrad" x1="0" x2="1"><stop stop-color="#27386c"/><stop offset="1" stop-color="#1c4d52"/></linearGradient></defs>
+            <style>.aiNode{fill:#13243b;stroke:#405a7d;stroke-width:1.5}.aiT{fill:#f0f4ff;font-size:17px;font-weight:800}.aiS{fill:#9fb0c9;font-size:12px}.aiE{stroke:#7c8cff;stroke-width:2.5;fill:none;marker-end:url(#aiArrow)}</style>
+            <rect x="26" y="30" width="1108" height="75" rx="18" fill="url(#aiGrad)" stroke="#4c6687"/><text x="55" y="63" class="aiT">AI Orchestrator</text><text x="55" y="87" class="aiS">입력 준비 · Provider 선택 · Job 실행 · 결과 정규화 · 신뢰도 계산 · 비용 기록</text>
+            <path class="aiE" d="M140 105 L140 150"/><path class="aiE" d="M360 105 L360 150"/><path class="aiE" d="M580 105 L580 150"/><path class="aiE" d="M800 105 L800 150"/><path class="aiE" d="M1020 105 L1020 150"/>
+            <rect class="aiNode" x="35" y="155" width="210" height="78" rx="14"/><text x="140" y="185" text-anchor="middle" class="aiT">자동 자막</text><text x="140" y="208" text-anchor="middle" class="aiS">VAD · STT · Word Timing</text>
+            <rect class="aiNode" x="255" y="155" width="210" height="78" rx="14"/><text x="360" y="185" text-anchor="middle" class="aiT">침묵 제거</text><text x="360" y="208" text-anchor="middle" class="aiS">Speech Segment · Padding</text>
+            <rect class="aiNode" x="475" y="155" width="210" height="78" rx="14"/><text x="580" y="185" text-anchor="middle" class="aiT">자동 리프레임</text><text x="580" y="208" text-anchor="middle" class="aiS">Detect · Track · Stabilize</text>
+            <rect class="aiNode" x="695" y="155" width="210" height="78" rx="14"/><text x="800" y="185" text-anchor="middle" class="aiT">하이라이트</text><text x="800" y="208" text-anchor="middle" class="aiS">Scene · Semantics · Score</text>
+            <rect class="aiNode" x="915" y="155" width="210" height="78" rx="14"/><text x="1020" y="185" text-anchor="middle" class="aiT">오디오 개선</text><text x="1020" y="208" text-anchor="middle" class="aiS">Denoise · Normalize · Mix</text>
+            <path class="aiE" d="M140 233 L140 277 L445 277"/><path class="aiE" d="M360 233 L360 277 L445 277"/><path class="aiE" d="M580 233 L580 277"/><path class="aiE" d="M800 233 L800 277 L715 277"/><path class="aiE" d="M1020 233 L1020 277 L715 277"/>
+            <rect x="445" y="252" width="270" height="55" rx="14" fill="#223b47" stroke="#55d6be"/><text x="580" y="276" text-anchor="middle" class="aiT">Timeline Patch</text><text x="580" y="296" text-anchor="middle" class="aiS">미리보기 → 승인 → 적용 → 일괄 복구</text>
+          </svg>
+        </figure>
+        <div class="grid grid-3" style="margin-top:16px">
+          <article class="card"><h3>Provider 추상화</h3><p>STT, 배경 제거, LLM, TTS를 인터페이스로 분리해 모델과 외부 API를 교체할 수 있게 합니다.</p></article>
+          <article class="card"><h3>비용 우선순위</h3><p>초기에는 외부 API로 검증하고 사용량이 많은 STT와 배경 제거부터 자체 GPU로 전환합니다.</p></article>
+          <article class="card"><h3>안전한 적용</h3><p>낮은 신뢰도 표시, 원본 보존, 승인 전 미리보기, 한 번에 되돌리기를 기본 UX로 둡니다.</p></article>
+        </div>
+      </section>
+
+      <section id="roadmap">
+        <div class="section-kicker">28-Week Roadmap</div>
+        <h2>Phase별 개발 계획</h2>
+        <p class="lead">각 Phase는 기능 목록이 아니라 검증 가능한 사용자 결과로 종료합니다.</p>
+        <div class="roadmap">
+          <article class="phase"><div class="phase-week">1~2주</div><div class="phase-content"><div class="phase-head"><div><span class="tag purple">PHASE 0</span><h3>기술 검증 및 범위 고정</h3></div><strong>2주</strong></div><ul><li>WebCodecs/WebGL 프리뷰와 프레임 탐색 검증</li><li>1080p 업로드, 프록시, FFmpeg 컷·자막 렌더링</li><li>프로젝트 스키마 v0와 AI 공급자 비용 비교</li></ul><div class="done"><strong>완료 기준:</strong> 10분 영상 업로드 → 프록시 편집 → 두 구간 컷과 자막 포함 MP4 출력 성공</div></div></article>
+          <article class="phase"><div class="phase-week">3~5주</div><div class="phase-content"><div class="phase-head"><div><span class="tag">PHASE 1</span><h3>플랫폼 기반 구축</h3></div><strong>3주</strong></div><ul><li>인증, 프로젝트 CRUD, 직접 업로드, 미디어 검증</li><li>프록시·썸네일·파형 생성과 작업 큐</li><li>자동 저장, revision, 로그·메트릭·스테이징 환경</li></ul><div class="done"><strong>완료 기준:</strong> 2GB 업로드 재개, 실패 자동 재시도, 프로젝트 생성부터 Asset READY까지 전체 흐름 동작</div></div></article>
+          <article class="phase"><div class="phase-week">6~12주</div><div class="phase-content"><div class="phase-head"><div><span class="tag orange">PHASE 2</span><h3>핵심 편집기</h3></div><strong>7주</strong></div><ul><li>멀티트랙, 트림·분할·이동, 재생 헤드, 스냅</li><li>Undo/Redo, 위치·크기·회전, 텍스트, 자막, 오디오</li><li>트랜지션, 720p·1080p 서버 렌더링과 다운로드</li></ul><div class="done"><strong>완료 기준:</strong> 30분 프로젝트 편집·복원, Undo 100단계, 자막·음악·전환을 포함한 1080p 출력</div></div></article>
+          <article class="phase"><div class="phase-week">13~18주</div><div class="phase-content"><div class="phase-head"><div><span class="tag purple">PHASE 3</span><h3>AI 편집 MVP</h3></div><strong>6주</strong></div><ul><li>한·영 자동 자막, 단어 타임코드, 자막 스타일</li><li>침묵·필러 후보, 노이즈 제거, 배경 제거</li><li>세로 자동 리프레임, AI 미리보기·일괄 복구</li></ul><div class="done"><strong>완료 기준:</strong> 10분 대화 영상을 자막 포함 세로 영상으로 변환하고 모든 AI 변경을 한 번에 되돌림</div></div></article>
+          <article class="phase"><div class="phase-week">19~24주</div><div class="phase-content"><div class="phase-head"><div><span class="tag">PHASE 4</span><h3>숏폼 자동 생성</h3></div><strong>6주</strong></div><ul><li>장면·발화 분석과 하이라이트 점수화</li><li>15·30·60초 후보 3~5개 자동 생성</li><li>자동 컷·자막·리프레임, 제목·설명·해시태그</li></ul><div class="done"><strong>완료 기준:</strong> 30분 영상에서 수정 가능한 완결형 숏폼 후보 3개 이상 생성</div></div></article>
+          <article class="phase"><div class="phase-week">25~28주</div><div class="phase-content"><div class="phase-head"><div><span class="tag orange">PHASE 5</span><h3>베타 안정화 및 출시</h3></div><strong>4주</strong></div><ul><li>부하·브라우저 호환·복구·실패 UX 테스트</li><li>사용량 제한, 결제 기반, 보관 정책, 개인정보 삭제</li><li>운영 도구, 온보딩, 피드백 수집, 장애 대응</li></ul><div class="done"><strong>완료 기준:</strong> 저장 성공률 99.9%, 렌더 성공률 98%, 사용자별 비용 추적과 운영 진단 가능</div></div></article>
+        </div>
+      </section>
+
+      <section id="operations">
+        <div class="section-kicker">Team, KPI &amp; Risk</div>
+        <h2>팀 구성과 출시 기준</h2>
+        <div class="table-wrap">
+          <table class="phase-table">
+            <thead><tr><th>역할</th><th>인원</th><th>주요 책임</th></tr></thead>
+            <tbody><tr><td><strong>Tech Lead / Backend</strong></td><td>1</td><td>시스템 설계, API, 데이터, 작업 큐</td></tr><tr><td><strong>Frontend Editor</strong></td><td>2</td><td>타임라인, 프리뷰, 편집 UX, 상태 관리</td></tr><tr><td><strong>Media Backend</strong></td><td>1</td><td>FFmpeg, 프록시, 렌더링, 품질 검사</td></tr><tr><td><strong>AI Engineer</strong></td><td>1</td><td>STT, 리프레임, 하이라이트, 비용 최적화</td></tr><tr><td><strong>PM / Product Designer</strong></td><td>1</td><td>사용자 흐름, 템플릿, 범위와 우선순위</td></tr><tr><td><strong>QA / DevOps</strong></td><td>0.5~1</td><td>회귀·부하 테스트, 배포, 관측성, 운영</td></tr></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:30px">출시 KPI</h3>
+        <div class="grid grid-4">
+          <article class="card"><span class="tag">RELIABILITY</span><h3 style="margin-top:10px">99.9%</h3><p>프로젝트 저장 성공률</p></article>
+          <article class="card"><span class="tag">RENDER</span><h3 style="margin-top:10px">98%+</h3><p>최종 렌더링 성공률</p></article>
+          <article class="card"><span class="tag orange">VALUE</span><h3 style="margin-top:10px">3개+</h3><p>30분 영상당 숏폼 후보</p></article>
+          <article class="card"><span class="tag purple">CONTROL</span><h3 style="margin-top:10px">100%</h3><p>AI 작업 되돌리기 가능</p></article>
+        </div>
+
+        <h3 style="margin-top:30px">MVP 포함 및 보류</h3>
+        <div class="priority">
+          <article class="card yes"><h3>MVP에 반드시 포함</h3><ul class="compact-list"><li>업로드·프록시·멀티트랙</li><li>분할·트림·이동·텍스트</li><li>자동 저장·복구·Undo/Redo</li><li>자동 자막·침묵 제거</li><li>자동 리프레임·1080p 출력</li></ul></article>
+          <article class="card later"><h3>베타 이후로 보류</h3><ul class="compact-list"><li>실시간 공동 편집</li><li>고급 키프레임·멀티캠</li><li>4K·HDR·고급 컬러</li><li>모바일 네이티브 앱</li><li>템플릿 마켓·플러그인</li></ul></article>
+        </div>
+
+        <h3 style="margin-top:30px">주요 리스크와 대응</h3>
+        <div class="grid grid-2">
+          <article class="card"><h3>프리뷰와 출력 불일치</h3><p>공통 Render Instruction, 기능별 골든 프로젝트, 프레임 비교를 통해 차이를 지속적으로 관리합니다.</p></article>
+          <article class="card"><h3>GPU·AI 비용 증가</h3><p>영상 분당 원가를 Job 단위로 기록하고 캐시, 샘플링, Provider 라우팅으로 비용을 통제합니다.</p></article>
+          <article class="card"><h3>대용량 업로드 실패</h3><p>Multipart 업로드, 재개, 체크섬 검증, 저장소 직접 전송으로 네트워크 실패를 흡수합니다.</p></article>
+          <article class="card"><h3>편집 상태 손실</h3><p>로컬 복구본, 자동 저장, revision 충돌 감지, 주기적 스냅샷으로 프로젝트를 보호합니다.</p></article>
+        </div>
+      </section>
+
+      <section>
+        <div class="card" style="padding:30px;border-color:rgba(85,214,190,.45);background:linear-gradient(135deg,rgba(85,214,190,.1),rgba(124,140,255,.1))">
+          <div class="section-kicker">Definition of Done</div>
+          <h2 style="font-size:30px">최종 베타 성공 시나리오</h2>
+          <p class="lead" style="margin-bottom:0">사용자가 30분짜리 가로형 대화 영상을 업로드하면 AI가 내용을 분석해 세로형 숏폼 후보 3개를 생성하고, 사용자는 자막과 컷을 수정한 뒤 1080p MP4로 안정적으로 출력할 수 있습니다.</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer"><strong>AI Video Editor Blueprint</strong><br>작성 기준일: 2026년 7월 29일 · 외부 리소스 없이 단일 HTML로 구성</footer>
+
+  <script>
+    function downloadDocument() {
+      const clone = document.documentElement.cloneNode(true);
+      const source = '<!doctype html>\n' + clone.outerHTML;
+      const blob = new Blob([source], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'ai-video-editor-development-plan.html';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  </script>
+</body>
+</html>
