@@ -37,7 +37,9 @@
   const state = {
     project: emptyProject(), selection: null, playhead: 0, playing: false, zoom: 18,
     past: [], future: [], saveStatus: 'loading', exportOpen: false,
-    exportProgress: { active: false, progress: 0, status: '' },
+    exportFormat: 'webm', exportError: '',
+    exportCapability: { checked: false, loading: false, available: false, message: '서버 MP4 상태를 확인하지 않았습니다.' },
+    exportProgress: { active: false, progress: 0, status: '', jobId: '', format: '' },
     previewVisual: null, previewAudio: null, activeVisualId: '', activeAudioId: '',
     animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
     sttJob: { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false },
@@ -506,7 +508,16 @@
   function renderModal() {
     const root = document.getElementById('modalRoot');
     if (!state.exportOpen) { root.innerHTML = ''; return; }
-    root.innerHTML = `<div class="modal-backdrop"><section class="export-dialog" role="dialog" aria-modal="true"><div class="modal-heading"><div><span class="eyebrow">EXPORT</span><h2>영상 내보내기</h2></div><button id="closeModal" ${state.exportProgress.active ? 'disabled' : ''}>×</button></div><div class="export-preview"><div style="aspect-ratio:${state.project.canvas.width}/${state.project.canvas.height}">${state.project.canvas.ratio}</div><span>${escapeHtml(state.project.title)}</span></div><label class="field"><span>화질</span><select id="exportQuality" ${state.exportProgress.active ? 'disabled' : ''}><option value="draft">Draft · 540p · 빠른 확인</option><option value="hd">HD · 1080p · 고화질</option></select></label><div class="export-details"><span>WebM</span><span>30 FPS</span><span>${state.project.duration.toFixed(1)}초</span></div><p class="export-note">브라우저에서 실시간 합성하므로 영상 길이만큼 시간이 걸립니다. 상용 MP4는 후속 서버 렌더러에서 제공합니다.</p>${state.exportProgress.active ? `<div class="progress-wrap"><div><span>${state.exportProgress.status}</span><b>${Math.round(state.exportProgress.progress*100)}%</b></div><progress value="${state.exportProgress.progress}" max="1"></progress></div>` : ''}<p id="exportError" class="inline-error" hidden></p><button id="startExport" class="button primary modal-export" ${state.exportProgress.active || !state.project.assets.length ? 'disabled' : ''}>${state.exportProgress.active ? '렌더링 중…' : 'WebM 다운로드'}</button></section></div>`;
+    const progress = state.exportProgress;
+    const capability = state.exportCapability;
+    const mp4Reason = capability.loading
+      ? 'FFmpeg 서버 상태 확인 중…'
+      : capability.available
+        ? 'FFmpeg 비동기 렌더 · 빠른 시작 지원'
+        : capability.message;
+    const format = state.exportFormat === 'mp4' && capability.available ? 'mp4' : 'webm';
+    const isMp4 = format === 'mp4';
+    root.innerHTML = `<div class="modal-backdrop"><section class="export-dialog" role="dialog" aria-modal="true"><div class="modal-heading"><div><span class="eyebrow">EXPORT</span><h2>영상 내보내기</h2></div><button id="closeModal" ${progress.active ? 'disabled' : ''}>×</button></div><div class="export-preview"><div style="aspect-ratio:${state.project.canvas.width}/${state.project.canvas.height}">${state.project.canvas.ratio}</div><span>${escapeHtml(state.project.title)}</span></div><div class="export-format-grid"><label class="export-format ${isMp4 ? 'selected' : ''} ${capability.available ? '' : 'disabled'}"><input type="radio" name="exportFormat" value="mp4" ${isMp4 ? 'checked' : ''} ${progress.active || !capability.available ? 'disabled' : ''}><strong>MP4</strong><small>${escapeHtml(mp4Reason)}</small></label><label class="export-format ${!isMp4 ? 'selected' : ''}"><input type="radio" name="exportFormat" value="webm" ${!isMp4 ? 'checked' : ''} ${progress.active ? 'disabled' : ''}><strong>WebM</strong><small>브라우저 실시간 렌더 · 서버 불필요</small></label></div><label class="field"><span>화질</span><select id="exportQuality" ${progress.active ? 'disabled' : ''}><option value="draft">Draft · 540p · 빠른 확인</option><option value="hd">HD · 1080p · 고화질</option></select></label><div class="export-details"><span>${isMp4 ? 'H.264 MP4' : 'WebM'}</span><span>30 FPS</span><span>${state.project.duration.toFixed(1)}초</span></div><p class="export-note">${isMp4 ? '원본을 서버에 업로드한 뒤 비동기 FFmpeg Job으로 영상·오디오·자막·리프레임을 합성합니다.' : '브라우저에서 실시간 합성하므로 영상 길이만큼 시간이 걸립니다.'}</p>${progress.active ? `<div class="progress-wrap"><div><span>${escapeHtml(progress.status)}</span><b>${Math.round(progress.progress * 100)}%</b></div><progress value="${progress.progress}" max="1"></progress></div>` : ''}<p id="exportError" class="inline-error" ${state.exportError ? '' : 'hidden'}>${escapeHtml(state.exportError)}</p><div class="export-actions">${progress.active && progress.format === 'mp4' ? '<button id="cancelExport" class="button export-cancel">내보내기 취소</button>' : ''}<button id="startExport" class="button primary modal-export" ${progress.active || !state.project.assets.length ? 'disabled' : ''}>${progress.active ? (progress.format === 'mp4' ? 'MP4 렌더링 중…' : 'WebM 렌더링 중…') : `${isMp4 ? 'MP4' : 'WebM'} 다운로드`}</button></div></section></div>`;
   }
 
   function renderAll() {
@@ -1455,6 +1466,139 @@
   const safeName = (name) => name.replace(/[^a-zA-Z0-9가-힣-_]/g, '-') || 'shortform';
   function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 
+  let exportController = null;
+  let exportRunVersion = 0;
+
+  async function refreshRenderCapability(force = false) {
+    if (state.exportCapability.loading || (state.exportCapability.checked && state.exportCapability.available && !force)) return;
+    if (location.protocol === 'file:') {
+      state.exportCapability = {
+        checked: true, loading: false, available: false,
+        message: 'MP4는 npm run dev로 서버를 실행할 때 사용할 수 있습니다.',
+      };
+      state.exportFormat = 'webm';
+      renderModal();
+      return;
+    }
+    state.exportCapability = { ...state.exportCapability, loading: true };
+    renderModal();
+    try {
+      const capability = await apiPayload(await fetch('/api/render/health', { cache: 'no-store' }));
+      state.exportCapability = {
+        checked: true, loading: false, available: Boolean(capability.available),
+        message: capability.message || (capability.available ? '서버 MP4 렌더링을 사용할 수 있습니다.' : '서버 MP4 렌더링을 사용할 수 없습니다.'),
+      };
+      if (!capability.available) state.exportFormat = 'webm';
+    } catch (reason) {
+      state.exportCapability = {
+        checked: true, loading: false, available: false,
+        message: reason instanceof Error ? reason.message : 'MP4 렌더 서버에 연결하지 못했습니다.',
+      };
+      state.exportFormat = 'webm';
+    }
+    renderModal();
+  }
+
+  async function exportMp4(quality, signal) {
+    if (!state.exportCapability.available) throw new Error(state.exportCapability.message);
+    const usedIds = [...new Set(state.project.clips.map((clip) => clip.assetId))];
+    const usedAssets = usedIds.map((id) => state.project.assets.find((asset) => asset.id === id)).filter(Boolean);
+    for (let index = 0; index < usedAssets.length; index += 1) {
+      if (signal.aborted) throw new DOMException('내보내기가 취소되었습니다.', 'AbortError');
+      const asset = usedAssets[index];
+      updateExport(0.02 + index / Math.max(1, usedAssets.length) * 0.16, `원본 업로드 ${index + 1}/${usedAssets.length}`);
+      const media = await loadBlob(asset.id);
+      if (!media) throw new Error(`${asset.name} 원본을 로컬 저장소에서 찾을 수 없습니다.`);
+      await apiPayload(await fetch(`/api/render/assets/${encodeURIComponent(asset.id)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': asset.mimeType || media.type || 'application/octet-stream',
+          'X-File-Name': encodeURIComponent(asset.name),
+        },
+        body: media,
+        signal,
+      }));
+    }
+
+    updateExport(0.2, 'MP4 렌더 Job 생성 중');
+    const requestedJobId = uid();
+    updateExport(0.2, 'MP4 렌더 Job 생성 중', { jobId: requestedJobId });
+    const job = await apiPayload(await fetch('/api/render/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: requestedJobId, project: persistable(state.project), quality }),
+      signal,
+    }));
+    updateExport(0.2, job.phase || '렌더 대기 중', { jobId: job.id });
+
+    while (!signal.aborted) {
+      const current = await apiPayload(await fetch(`/api/render/jobs/${job.id}`, { cache: 'no-store', signal }));
+      updateExport(0.2 + Math.max(0, Math.min(1, current.progress || 0)) * 0.78, current.phase || 'MP4 렌더링 중', { jobId: job.id });
+      if (current.status === 'completed') {
+        updateExport(0.99, 'MP4 결과 다운로드 중', { jobId: job.id });
+        const response = await fetch(current.result.url, { cache: 'no-store', signal });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `MP4 결과를 받지 못했습니다. (${response.status})`);
+        }
+        return { blob: await response.blob(), fileName: current.result.fileName || `${safeName(state.project.title)}.mp4` };
+      }
+      if (current.status === 'failed' || current.status === 'cancelled') {
+        throw new Error(current.error || (current.status === 'cancelled' ? 'MP4 렌더링이 취소되었습니다.' : 'MP4 렌더링에 실패했습니다.'));
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+    }
+    throw new DOMException('내보내기가 취소되었습니다.', 'AbortError');
+  }
+
+  async function startExport(quality) {
+    const format = state.exportFormat === 'mp4' && state.exportCapability.available ? 'mp4' : 'webm';
+    const runVersion = ++exportRunVersion;
+    exportController = new AbortController();
+    state.exportError = '';
+    state.exportProgress = { active: true, progress: 0, status: '내보내기 준비 중', jobId: '', format };
+    state.playing = false;
+    syncPreview();
+    renderModal();
+    try {
+      if (format === 'mp4') {
+        const result = await exportMp4(quality, exportController.signal);
+        if (runVersion !== exportRunVersion) return;
+        downloadBlob(result.blob, result.fileName);
+      } else {
+        const blob = await exportVideo(quality);
+        if (runVersion !== exportRunVersion) return;
+        downloadBlob(blob, `${safeName(state.project.title)}.webm`);
+      }
+      state.exportProgress = { active: false, progress: 1, status: '완료', jobId: '', format };
+      state.exportOpen = false;
+      renderModal();
+    } catch (reason) {
+      if (runVersion !== exportRunVersion) return;
+      const jobId = state.exportProgress.jobId;
+      if (jobId) void fetch(`/api/render/jobs/${jobId}`, { method: 'DELETE' }).catch(() => undefined);
+      state.exportProgress = { active: false, progress: 0, status: '', jobId: '', format: '' };
+      state.exportError = reason?.name === 'AbortError'
+        ? '내보내기를 취소했습니다.'
+        : reason instanceof Error ? reason.message : '내보내기에 실패했습니다.';
+      renderModal();
+    } finally {
+      if (runVersion === exportRunVersion) exportController = null;
+    }
+  }
+
+  async function cancelExport() {
+    if (!state.exportProgress.active || state.exportProgress.format !== 'mp4') return;
+    const jobId = state.exportProgress.jobId;
+    exportRunVersion += 1;
+    exportController?.abort();
+    exportController = null;
+    state.exportProgress = { active: false, progress: 0, status: '취소됨', jobId: '', format: '' };
+    state.exportError = 'MP4 내보내기를 취소했습니다.';
+    renderModal();
+    if (jobId) await fetch(`/api/render/jobs/${jobId}`, { method: 'DELETE' }).catch(() => undefined);
+  }
+
   function drawCover(context, source, sourceWidth, sourceHeight, width, height, focus = { x: 0.5, y: 0.5 }) {
     const sourceRatio = sourceWidth / Math.max(1, sourceHeight);
     const targetRatio = width / Math.max(1, height);
@@ -1558,6 +1702,8 @@
         }
 
         const audioClip = state.project.clips.find((item) => item.trackId === 'audio' && time >= item.timelineStart && time < item.timelineStart + item.sourceEnd - item.sourceStart);
+        const activeVideoElement = clip && elements.get(clip.assetId);
+        if (activeVideoElement instanceof HTMLVideoElement) activeVideoElement.muted = Boolean(audioClip);
         for (const [id, element] of audioElements) {
           if (id !== audioClip?.assetId) element.pause();
         }
@@ -1588,7 +1734,10 @@
     return new Blob(chunks, { type: mime || 'video/webm' });
   }
 
-  function updateExport(progress,status){state.exportProgress={active:true,progress,status};renderModal();}
+  function updateExport(progress, status, patch = {}) {
+    state.exportProgress = { ...state.exportProgress, active: true, progress, status, ...patch };
+    renderModal();
+  }
 
   function bindEvents() {
     document.getElementById('pickFiles').onclick = () => document.getElementById('fileInput').click();
@@ -1604,7 +1753,7 @@
     document.getElementById('backButton').onclick=()=>seek(state.playhead-1);document.getElementById('forwardButton').onclick=()=>seek(state.playhead+1);document.getElementById('playButton').onclick=togglePlayback;
     document.getElementById('zoomInput').oninput=(event)=>{state.zoom=Number(event.target.value);renderTimeline();};
     document.getElementById('downloadAppButton').onclick=downloadStandaloneApp;
-    document.getElementById('exportButton').onclick=()=>{if(hasPendingReframe())return;state.exportOpen=true;renderModal();};
+    document.getElementById('exportButton').onclick=()=>{if(hasPendingReframe())return;state.exportOpen=true;state.exportError='';renderModal();void refreshRenderCapability();};
 
     document.getElementById('assetList').onclick=(event)=>{const add=event.target.closest('[data-add-asset]'),remove=event.target.closest('[data-remove-asset]'),select=event.target.closest('[data-select-asset]');if(add){event.stopPropagation();addAssetToTimeline(add.dataset.addAsset);}else if(remove){event.stopPropagation();void removeAsset(remove.dataset.removeAsset);}else if(select){state.selection={kind:'asset',id:select.dataset.selectAsset};renderAll();}};
     document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){state.selection={kind:'text',id:target.dataset.selectText};renderAll();}};
@@ -1633,7 +1782,25 @@
       } else if(target.type==='range'||target.type==='color') handleInspectorChange(target);
     };
     document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.dataset.previewReframe !== undefined)previewReframeKeyframe(Number(target.dataset.previewReframe));else if(target.dataset.previewSilence !== undefined)previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));else if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();else if(target.id==='analyzeReframeButton')void analyzeReframe();else if(target.id==='cancelReframeButton')cancelReframeAnalysis();else if(target.id==='applyReframeButton')applyReframeProposal();else if(target.id==='clearReframeButton')clearReframeProposal();else if(target.id==='removeReframeButton')removeAppliedReframe(target.dataset.reframeAsset);else if(target.id==='analyzeSilenceButton')void analyzeSilence();else if(target.id==='applySilenceButton')applySilenceRemoval();else if(target.id==='clearSilenceButton')clearSilenceCandidates();};
-    document.getElementById('modalRoot').onclick=async(event)=>{if(event.target.id==='closeModal'){state.exportOpen=false;renderModal();}if(event.target.id==='startExport'){const quality=document.getElementById('exportQuality').value;state.playing=false;syncPreview();try{const blob=await exportVideo(quality);downloadBlob(blob,`${safeName(state.project.title)}.webm`);state.exportProgress={active:false,progress:1,status:'완료'};state.exportOpen=false;renderModal();}catch(reason){state.exportProgress={active:false,progress:0,status:''};renderModal();const error=document.getElementById('exportError');error.textContent=reason.message||'내보내기에 실패했습니다.';error.hidden=false;}}};
+    const modalRoot = document.getElementById('modalRoot');
+    modalRoot.onchange = (event) => {
+      if (event.target.name !== 'exportFormat' || state.exportProgress.active) return;
+      state.exportFormat = event.target.value === 'mp4' && state.exportCapability.available ? 'mp4' : 'webm';
+      state.exportError = '';
+      renderModal();
+    };
+    modalRoot.onclick = (event) => {
+      if (event.target.id === 'closeModal' && !state.exportProgress.active) {
+        state.exportOpen = false;
+        state.exportError = '';
+        renderModal();
+      } else if (event.target.id === 'cancelExport') {
+        void cancelExport();
+      } else if (event.target.id === 'startExport') {
+        const quality = document.getElementById('exportQuality').value;
+        void startExport(quality);
+      }
+    };
 
     window.addEventListener('keydown',(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}else if(event.code==='Space'){event.preventDefault();togglePlayback();}});
   }

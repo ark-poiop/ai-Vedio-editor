@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { createSttService } from './stt-service.mjs';
+import { createRenderService } from './render-service.mjs';
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -11,12 +12,17 @@ const contentTypes = {
   '.srt': 'application/x-subrip; charset=utf-8',
 };
 
-export function createShortformServer({ root, sttService = createSttService() }) {
+export function createShortformServer({
+  root,
+  sttService = createSttService(),
+  renderService = createRenderService(),
+}) {
   const resolvedRoot = resolve(root);
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     try {
       if (await sttService.handleRequest(request, response, url)) return;
+      if (await renderService.handleRequest(request, response, url)) return;
       const pathname = decodeURIComponent(url.pathname);
       let target = resolve(resolvedRoot, `.${pathname === '/' ? '/index.html' : pathname}`);
       if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${sep}`)) {
@@ -35,4 +41,19 @@ export function createShortformServer({ root, sttService = createSttService() })
       if (!response.writableEnded) response.end('Not found');
     }
   });
+  let renderClosePromise;
+  const closeRenderService = () => {
+    renderClosePromise ||= Promise.resolve(renderService.close?.());
+    return renderClosePromise;
+  };
+  server.once('close', () => { void closeRenderService(); });
+  server.shutdown = async () => {
+    if (server.listening) {
+      await new Promise((resolveClose, rejectClose) => {
+        server.close((error) => error ? rejectClose(error) : resolveClose());
+      });
+    }
+    await closeRenderService();
+  };
+  return server;
 }
