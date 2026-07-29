@@ -1,6 +1,6 @@
 # LLM Provider 및 숏폼 Orchestrator 계약
 
-Shortform Studio의 LLM 기능은 deterministic 숏폼 후보를 대체하지 않고, 서버에서 후보의 의미 점수·순위·제목·요약·근거만 보강합니다. API 키와 Provider 주소는 브라우저, localStorage, 프로젝트 JSON에 저장하거나 반환하지 않습니다.
+Shortform Studio의 LLM 기능은 deterministic 숏폼 후보를 대체하지 않고, 서버에서 후보의 의미 점수·순위·제목·요약·근거만 보강합니다. API 키는 브라우저, localStorage, 프로젝트 JSON에 저장하거나 반환하지 않습니다. Docker/서버 환경변수는 영구 설정이며, 로컬 LLM의 허용된 URL과 model ID는 로컬 웹 설정에서 서버 메모리에 임시 적용할 수 있습니다.
 
 ## 실행 모드
 
@@ -38,7 +38,7 @@ LLM_REQUEST_TIMEOUT_MS=30000
 LLM_MAX_RESPONSE_BYTES=131072
 ```
 
-`LLM_BASE_URL`은 HTTPS만 허용하며 로컬 개발용 `localhost`, `127.0.0.1`, `[::1]`에 한해 HTTP를 허용합니다. URL의 자격 증명, query, fragment와 upstream redirect는 허용하지 않습니다. model, base URL, API key는 서버 시작 시 환경 변수에서만 읽으며 브라우저에서 변경할 수 없습니다.
+`LLM_BASE_URL`은 HTTPS만 허용하며 로컬 개발용 `localhost`, `127.0.0.1`, `[::1]`, Docker Desktop의 `host.docker.internal`에 한해 HTTP를 허용합니다. URL의 자격 증명, query, fragment와 upstream redirect는 허용하지 않습니다. 클라우드 Provider의 model, base URL, API key는 서버 시작 시 환경 변수에서 읽습니다. 웹 설정은 로컬 호스트 URL과 model ID만 받을 수 있고 API key 입력은 제공하지 않습니다.
 
 ## 로컬 API
 
@@ -62,7 +62,33 @@ GET /api/llm/health
 }
 ```
 
-API key와 base URL은 반환하지 않습니다. `disabled` 또는 잘못된 설정은 `available: false`로 표시됩니다.
+API key와 환경변수 기반 base URL은 반환하지 않습니다. `disabled` 또는 잘못된 설정은 `available: false`로 표시됩니다.
+
+### 로컬 LLM 연결 테스트와 런타임 적용
+
+설정 모달은 다음 로컬 전용 API를 사용합니다.
+
+```http
+GET  /api/llm/config
+POST /api/llm/config/test
+POST /api/llm/config
+Content-Type: application/json
+```
+
+POST 본문은 API key 없이 로컬 URL과 model ID만 받습니다.
+
+```json
+{
+  "baseUrl": "http://host.docker.internal:11434/v1",
+  "model": "qwen2.5:7b"
+}
+```
+
+- `/api/llm/config/test`는 실제 `/chat/completions` 요청과 strict JSON 후보 schema 검증을 수행하지만 현재 Provider를 변경하지 않습니다.
+- `/api/llm/config`는 같은 테스트를 통과한 뒤에만 Provider를 교체합니다. 적용값은 메모리에만 있으며 서버 재시작 시 환경변수 설정으로 복원됩니다.
+- 웹 설정 URL은 `host.docker.internal`, `localhost`, `127.0.0.1`, `[::1]`만 허용합니다. 외부 HTTPS, 임의 사설 IP, 자격 증명·query·fragment URL은 런타임 설정에서 거부합니다.
+- 설정 API는 로컬 Host와 same-origin 요청만 허용합니다. 진행 중인 LLM 작업이 있으면 Provider 교체를 `409`로 거부합니다.
+- 인증이 없는 로컬 Provider에는 서버가 비밀이 아닌 `local-only` Authorization placeholder를 사용하며 브라우저에 API key 필드가 없습니다.
 
 ### 숏폼 후보 재평가
 
@@ -144,7 +170,7 @@ Adapter는 Provider에 `response_format: { "type": "json_object" }`를 요청합
 4. 목표 길이 변경, 후보 취소·재생성, 타임라인·자막 변경 시 `AbortController`와 `analysisVersion`으로 진행 중 요청 및 stale 응답을 폐기합니다.
 5. LLM 보강 결과도 자동 적용하지 않습니다. 사용자가 후보를 검토하고 선택한 뒤 기존 단일 `commit()`으로 적용하며 Undo로 복원할 수 있습니다.
 
-브라우저의 semantic assist 선택만 `shortform-studio:llm-preference:v1`에 저장됩니다. Provider 자격 증명이나 모델 설정은 저장하지 않습니다.
+브라우저의 semantic assist 선택만 `shortform-studio:llm-preference:v1`에 저장됩니다. 웹에서 입력한 로컬 URL과 model ID는 서버 메모리에만 임시 적용되고 localStorage나 프로젝트 JSON에는 저장되지 않습니다. Provider API 자격 증명은 계속 서버 환경변수로만 관리합니다.
 
 ## 제한, 오류 처리 및 배포
 

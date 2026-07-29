@@ -88,6 +88,25 @@ function completionEndpoint(baseUrl) {
   return url;
 }
 
+function validateRuntimeConfiguration(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw serviceError('로컬 LLM 설정 객체를 확인하세요.');
+  }
+  let baseUrl;
+  try {
+    baseUrl = validateProviderUrl(String(payload.baseUrl || '').trim());
+  } catch (error) {
+    throw serviceError(error instanceof Error ? error.message : 'LLM_BASE_URL 형식을 확인하세요.');
+  }
+  const localHosts = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
+  if (!localHosts.has(baseUrl.hostname.toLowerCase())) {
+    throw serviceError('웹 설정에서는 이 컴퓨터의 로컬 LLM 주소만 사용할 수 있습니다.');
+  }
+  const model = String(payload.model || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!model || model.length > 160) throw serviceError('로컬 LLM model ID는 1~160자여야 합니다.');
+  return { baseUrl, model };
+}
+
 function cleanText(value, maximumLength, field, { required = true } = {}) {
   if (typeof value !== 'string') {
     if (!required && value == null) return '';
@@ -279,6 +298,16 @@ function createOpenAiCompatibleProvider({ apiKey, baseUrl, model, timeoutMs, max
   };
 }
 
+async function probeProvider(provider, signal) {
+  const candidates = [{
+    id: 'connection-test', score: 50, start: 0, end: 15,
+    title: '연결 테스트', reasons: ['로컬 LLM 호환성 확인'],
+    transcriptExcerpt: '이 요청은 Shortform Studio와 로컬 LLM의 JSON 응답 호환성을 확인합니다.',
+  }];
+  const result = await provider.rerank({ candidates, targetDuration: 15, language: 'ko', signal });
+  validateSemanticOutput({ candidates: result }, candidates);
+}
+
 export function createLlmProvider(environment = process.env, { fetchImpl = globalThis.fetch } = {}) {
   const providerName = String(environment.LLM_PROVIDER || 'disabled').trim().toLowerCase();
   if (!providerName || providerName === 'disabled' || providerName === 'none') return createDisabledProvider();
@@ -306,28 +335,129 @@ export function createLlmProvider(environment = process.env, { fetchImpl = globa
 }
 
 export function createLlmService({
-  provider = createLlmProvider(),
+  environment = process.env,
+  fetchImpl = globalThis.fetch,
+  provider = createLlmProvider(environment, { fetchImpl }),
   maximumRequestBytes = DEFAULT_MAX_REQUEST_BYTES,
   requestBodyTimeoutMs = DEFAULT_BODY_TIMEOUT_MS,
   maximumConcurrency = DEFAULT_CONCURRENCY,
 } = {}) {
   const activeControllers = new Set();
+  const configurationControllers = new Set();
+  let activeProvider = provider;
+  let configurationSource = 'server-environment';
+  let runtimeBaseUrl = '';
+  let configurationBusy = false;
   let closed = false;
 
   async function handleRequest(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/llm/health') {
       sendJson(response, 200, {
-        status: closed ? 'closed' : provider.available ? 'ok' : 'unavailable',
-        configured: Boolean(provider.configured),
-        available: Boolean(!closed && provider.available),
-        provider: provider.name,
-        model: provider.model || '',
-        demo: Boolean(provider.demo),
-        reasonCode: provider.reasonCode || '',
-        configurationSource: 'server-environment',
-        restartRequired: true,
+        status: closed ? 'closed' : activeProvider.available ? 'ok' : 'unavailable',
+        configured: Boolean(activeProvider.configured),
+        available: Boolean(!closed && activeProvider.available),
+        provider: activeProvider.name,
+        model: activeProvider.model || '',
+        demo: Boolean(activeProvider.demo),
+        reasonCode: activeProvider.reasonCode || '',
+        configurationSource,
+        restartRequired: false,
+        persistent: configurationSource === 'server-environment',
         features: ['shortform-rerank', 'title', 'summary', 'reasons'],
       });
+      return true;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/llm/config') {
+      sendJson(response, 200, {
+        baseUrl: configurationSource === 'browser-runtime' ? runtimeBaseUrl : '',
+        model: configurationSource === 'browser-runtime' ? activeProvider.model || '' : '',
+        configurationSource,
+        persistent: configurationSource === 'server-environment',
+      });
+      return true;
+    }
+
+    const configurationRequest = url.pathname === '/api/llm/config/test' || url.pathname === '/api/llm/config';
+    if (configurationRequest) {
+      if (request.method !== 'POST') {
+        sendJson(response, 405, { error: '허용되지 않은 메서드입니다.' });
+        return true;
+      }
+      const applying = url.pathname === '/api/llm/config';
+      if (closed) {
+        sendJson(response, 503, { error: 'LLM 서비스가 종료 중입니다.' });
+        return true;
+      }
+      if (configurationBusy) {
+        sendJson(response, 409, { error: '다른 LLM 연결 설정을 처리 중입니다.' });
+        return true;
+      }
+      if (applying && activeControllers.size) {
+        sendJson(response, 409, { error: '진행 중인 LLM 작업이 끝난 뒤 설정을 적용하세요.' });
+        return true;
+      }
+
+      const controller = new AbortController();
+      const abortOnDisconnect = () => {
+        if (!response.writableEnded) controller.abort(Object.assign(new Error('클라이언트 연결이 종료되었습니다.'), { name: 'AbortError' }));
+      };
+      configurationBusy = true;
+      configurationControllers.add(controller);
+      request.once('aborted', abortOnDisconnect);
+      response.once('close', abortOnDisconnect);
+      try {
+        const payload = await readJsonBody(
+          request,
+          Math.min(maximumRequestBytes, 4 * 1024),
+          controller.signal,
+          boundedInteger(requestBodyTimeoutMs, DEFAULT_BODY_TIMEOUT_MS, 100, 30_000),
+        );
+        const config = validateRuntimeConfiguration(payload);
+        const candidateProvider = createLlmProvider({
+          ...environment,
+          LLM_PROVIDER: 'openai-compatible',
+          LLM_BASE_URL: config.baseUrl.toString(),
+          LLM_MODEL: config.model,
+          LLM_API_KEY: 'local-only',
+        }, { fetchImpl });
+        if (!candidateProvider.available) throw serviceError(candidateProvider.reason || '로컬 LLM 설정을 확인하세요.');
+        await probeProvider(candidateProvider, controller.signal);
+
+        if (applying) {
+          if (activeControllers.size) throw serviceError('진행 중인 LLM 작업이 끝난 뒤 설정을 적용하세요.', 409);
+          const previousProvider = activeProvider;
+          activeProvider = candidateProvider;
+          configurationSource = 'browser-runtime';
+          runtimeBaseUrl = config.baseUrl.toString().replace(/\/$/, '');
+          try { await previousProvider.close?.(); } catch { /* new provider is already active */ }
+        }
+        sendJson(response, 200, {
+          ok: true,
+          applied: applying,
+          provider: candidateProvider.name,
+          model: candidateProvider.model,
+          configurationSource: applying ? 'browser-runtime' : configurationSource,
+          persistent: !applying && configurationSource === 'server-environment',
+          message: applying ? '연결 테스트를 통과해 현재 서버에 적용했습니다.' : '연결 및 JSON 응답 호환성 테스트를 통과했습니다.',
+        });
+      } catch (error) {
+        if (response.writableEnded || response.destroyed) return true;
+        const aborted = controller.signal.aborted || error?.name === 'AbortError';
+        const statusCode = aborted ? 499 : error.statusCode || 502;
+        sendJson(response, statusCode, {
+          error: aborted
+            ? 'LLM 연결 테스트가 취소되었습니다.'
+            : error.statusCode
+              ? error.message
+              : `LLM 연결 테스트 실패: ${error instanceof Error ? error.message : '로컬 LLM 응답을 확인하세요.'}`,
+        });
+      } finally {
+        request.removeListener('aborted', abortOnDisconnect);
+        response.removeListener('close', abortOnDisconnect);
+        configurationControllers.delete(controller);
+        configurationBusy = false;
+      }
       return true;
     }
 
@@ -336,7 +466,7 @@ export function createLlmService({
       sendJson(response, 405, { error: '허용되지 않은 메서드입니다.' });
       return true;
     }
-    if (closed || !provider.available) {
+    if (closed || !activeProvider.available) {
       sendJson(response, 503, { error: closed ? 'LLM 서비스가 종료 중입니다.' : 'LLM Provider가 설정되지 않았습니다.' });
       return true;
     }
@@ -359,7 +489,7 @@ export function createLlmService({
         controller.signal,
         boundedInteger(requestBodyTimeoutMs, DEFAULT_BODY_TIMEOUT_MS, 100, 120_000),
       ));
-      const providerCandidates = await provider.rerank({ ...input, signal: controller.signal });
+      const providerCandidates = await activeProvider.rerank({ ...input, signal: controller.signal });
       const semantic = validateSemanticOutput({ candidates: providerCandidates }, input.candidates);
       const semanticById = new Map(semantic.map((candidate) => [candidate.id, candidate]));
       const candidates = input.candidates.map((candidate) => {
@@ -378,9 +508,9 @@ export function createLlmService({
       }).sort((first, second) => second.score - first.score || second.deterministicScore - first.deterministicScore)
         .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
       sendJson(response, 200, {
-        provider: provider.name,
-        model: provider.model || '',
-        demo: Boolean(provider.demo),
+        provider: activeProvider.name,
+        model: activeProvider.model || '',
+        demo: Boolean(activeProvider.demo),
         candidates,
       });
     } catch (error) {
@@ -401,8 +531,15 @@ export function createLlmService({
     if (closed) return;
     closed = true;
     for (const controller of activeControllers) controller.abort(Object.assign(new Error('서버 종료로 LLM 요청을 취소했습니다.'), { name: 'AbortError' }));
-    await provider.close?.();
+    for (const controller of configurationControllers) controller.abort(Object.assign(new Error('서버 종료로 LLM 연결 테스트를 취소했습니다.'), { name: 'AbortError' }));
+    await activeProvider.close?.();
   }
 
-  return { handleRequest, close, provider, activeControllers };
+  return {
+    handleRequest,
+    close,
+    get provider() { return activeProvider; },
+    activeControllers,
+    configurationControllers,
+  };
 }

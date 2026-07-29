@@ -13,6 +13,25 @@ const contentTypes = {
   '.srt': 'application/x-subrip; charset=utf-8',
 };
 
+function isLocalSameOriginConfigurationRequest(request) {
+  let requestUrl;
+  try {
+    requestUrl = new URL(`http://${request.headers.host || ''}`);
+  } catch {
+    return false;
+  }
+  const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+  if (!localHosts.has(requestUrl.hostname.toLowerCase())) return false;
+  const origin = String(request.headers.origin || '').trim();
+  if (!origin) return true;
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.origin === requestUrl.origin;
+  } catch {
+    return false;
+  }
+}
+
 export function createShortformServer({
   root,
   sttService = createSttService(),
@@ -23,6 +42,15 @@ export function createShortformServer({
   const server = createServer(async (request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     try {
+      if (url.pathname.startsWith('/api/llm/config') && !isLocalSameOriginConfigurationRequest(request)) {
+        response.writeHead(403, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        response.end(JSON.stringify({ error: 'LLM 연결 설정은 로컬 앱에서만 변경할 수 있습니다.' }));
+        return;
+      }
       if (await sttService.handleRequest(request, response, url)) return;
       if (await llmService.handleRequest(request, response, url)) return;
       if (await renderService.handleRequest(request, response, url)) return;

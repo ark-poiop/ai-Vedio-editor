@@ -96,7 +96,14 @@ LLM_API_KEY=local-only
 curl http://localhost:2210/api/llm/health
 ```
 
-응답의 `provider`가 `openai-compatible`, `model`이 지정한 모델이고 `configured`가 `true`이면 `.env`가 컨테이너에 적용된 것입니다. 이 health 응답은 자격 증명과 base URL을 노출하지 않으며, 실제 추론 가능 여부는 숏폼 의미 보강을 한 번 실행해 확인합니다.
+응답의 `provider`가 `openai-compatible`, `model`이 지정한 모델이고 `configured`가 `true`이면 `.env`가 컨테이너에 적용된 것입니다.
+
+또는 앱의 **설정 → AI 도움 → 로컬 LLM 연결**에서 Ollama/LM Studio preset을 선택하고 model ID를 입력한 뒤 다음 중 하나를 실행할 수 있습니다.
+
+- **연결 테스트**: 실제 `/chat/completions`와 앱이 요구하는 JSON 응답 호환성을 확인하며 현재 설정은 바꾸지 않습니다.
+- **테스트 후 적용**: 같은 테스트가 성공한 경우에만 현재 서버 Provider를 즉시 교체합니다.
+
+웹에서 적용한 URL과 model ID는 브라우저 저장소나 파일에 기록하지 않고 서버 메모리에만 유지합니다. 컨테이너를 재시작하면 `.env` 값으로 복원되므로 영구 설정은 `.env`에 기록하세요. 웹 화면에는 API key 입력 필드가 없으며 인증이 없는 로컬 LLM에는 서버가 비밀이 아닌 placeholder를 사용합니다.
 
 ### 클라우드 OpenAI-compatible LLM
 
@@ -132,11 +139,12 @@ docker compose up -d --build --force-recreate
 - 자동 자막 기본 언어
 - 숏폼 LLM 의미 보강 사용 여부
 - LLM, STT, FFmpeg 서버 연결 상태
+- 로컬 LLM Base URL·model ID 입력, Ollama/LM Studio preset, 실제 연결 테스트와 런타임 적용
 - LLM 서버 환경변수 설정 위치, 현재 미설정 원인, 복사 가능한 `.env` 예시
 
 레이아웃은 패널 경계의 resize handle을 마우스·펜으로 드래그하거나 키보드 방향키로 조절할 수 있습니다. 설정은 브라우저의 `shortform-studio:ui-preference:v1`에 저장되고 프로젝트 JSON에는 섞이지 않습니다.
 
-API 키, Provider URL, 모델 ID는 브라우저 설정이나 localStorage에 저장하지 않습니다. 설정 화면의 **LLM 정보는 어디에 입력하나요?** 안내에서 `.env` 예시를 복사할 수 있지만 실제 값은 반드시 Docker `.env` 또는 배포 플랫폼의 secret 환경변수로 입력해야 합니다. 서버 환경변수는 실행 중인 프로세스에서 안전하게 변경할 수 없으므로 적용하려면 컨테이너를 다시 생성해야 합니다. 설정 메뉴에는 공개 가능한 Provider 상태와 model 이름, 미설정 원인만 표시됩니다.
+API 키는 브라우저 설정이나 localStorage에 저장하지 않습니다. 로컬 LLM의 Base URL과 model ID는 설정 화면에서 테스트·임시 적용할 수 있지만 브라우저 저장소나 프로젝트 JSON에는 기록되지 않습니다. 컨테이너 재시작 후에도 유지할 영구 설정과 클라우드 Provider 자격 증명은 Docker `.env` 또는 배포 플랫폼의 secret 환경변수로 관리하세요. 설정 메뉴에는 공개 가능한 Provider 상태와 model 이름, 미설정 원인만 표시됩니다.
 
 ## 보안과 운영 제한
 
