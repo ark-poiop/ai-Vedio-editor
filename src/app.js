@@ -39,6 +39,8 @@
     exportProgress: { active: false, progress: 0, status: '' },
     previewVisual: null, previewAudio: null, activeVisualId: '', activeAudioId: '',
     animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
+    sttJob: { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false },
+    sttProposal: null, sttPollTimer: 0,
   };
 
   function recalculate(project) {
@@ -337,6 +339,13 @@
     const clip = state.selection?.kind === 'clip' ? state.project.clips.find((item) => item.id === state.selection.id) : null;
     const asset = clip && state.project.assets.find((item) => item.id === clip.assetId);
     const text = state.selection?.kind === 'text' ? state.project.texts.find((item) => item.id === state.selection.id) : null;
+    const sttAsset = getTranscribableAsset();
+    const sttProposal = state.sttProposal;
+    const sttRequiresServer = location.protocol === 'file:';
+    const sttStatusLabel = {
+      idle: 'STT', uploading: '업로드', queued: '대기', processing: '분석 중',
+      completed: '검토 필요', failed: '실패', cancelled: '취소됨',
+    }[state.sttJob.status] || 'STT';
     const numberField = (label, field, value, min = 0, max = '') => `<label class="field"><span>${label}</span><input data-field="${field}" type="number" min="${min}" ${max !== '' ? `max="${max}"` : ''} step="0.1" value="${Number(value).toFixed(2)}"></label>`;
     root.innerHTML = `
       <section class="property-section"><h3>캔버스</h3><label class="field"><span>화면 비율</span><select data-field="canvas-ratio"><option value="9:16" ${state.project.canvas.ratio === '9:16' ? 'selected' : ''}>9:16 · Shorts</option><option value="1:1" ${state.project.canvas.ratio === '1:1' ? 'selected' : ''}>1:1 · Square</option><option value="16:9" ${state.project.canvas.ratio === '16:9' ? 'selected' : ''}>16:9 · Landscape</option></select></label><div class="ratio-meta"><span>${state.project.canvas.width} × ${state.project.canvas.height}</span><em>30 FPS</em></div></section>
@@ -344,7 +353,7 @@
       ${text ? `<section class="property-section"><div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
-      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 도구</h3><small>다음 개발 단계</small></div></div><button disabled>자동 자막 생성 <span>STT 연결 예정</span></button><button disabled>침묵 구간 감지 <span>준비 중</span></button><button disabled>세로 자동 리프레임 <span>준비 중</span></button></section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
+      <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}<button disabled>침묵 구간 감지 <span>다음 단계</span></button><button disabled>세로 자동 리프레임 <span>준비 중</span></button></section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
   }
 
   function renderTimeline() {
@@ -455,7 +464,10 @@
 
   function captionFromCue(cue) {
     return {
-      id: uid(), role: 'caption', text: cue.text, start: cue.start, end: cue.end,
+      id: uid(), role: 'caption', source: cue.source || 'import',
+      text: cue.text, start: cue.start, end: cue.end,
+      confidence: Number.isFinite(cue.confidence) ? cue.confidence : undefined,
+      speaker: cue.speaker,
       x: 50, y: 82, fontSize: 58, fontWeight: 800,
       color: '#ffffff', background: '#000000bb', align: 'center',
     };
@@ -502,6 +514,161 @@
     downloadBlob(new Blob([`\uFEFF${srt}\n`], { type: 'application/x-subrip;charset=utf-8' }), `${safeName(state.project.title)}.srt`);
     state.captionMessage = `자막 ${captions.length}개를 SRT로 저장했습니다.`;
     renderInspector();
+  }
+
+  function getTranscribableAsset() {
+    if (state.selection?.kind === 'asset') {
+      const selected = state.project.assets.find((asset) => asset.id === state.selection.id);
+      if (selected && (selected.kind === 'video' || selected.kind === 'audio')) return selected;
+    }
+    if (state.selection?.kind === 'clip') {
+      const clip = state.project.clips.find((item) => item.id === state.selection.id);
+      const selected = clip && state.project.assets.find((asset) => asset.id === clip.assetId);
+      if (selected && (selected.kind === 'video' || selected.kind === 'audio')) return selected;
+    }
+    return state.project.assets.find((asset) => asset.kind === 'video' || asset.kind === 'audio');
+  }
+
+  async function apiPayload(response) {
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `요청에 실패했습니다. (${response.status})`);
+    return payload;
+  }
+
+  function renderSttState(patch) {
+    state.sttJob = { ...state.sttJob, ...patch };
+    renderInspector();
+  }
+
+  async function startAutoCaption() {
+    const asset = getTranscribableAsset();
+    if (!asset) {
+      renderSttState({ message: '먼저 영상 또는 오디오 파일을 추가하세요.' });
+      return;
+    }
+    if (location.protocol === 'file:') {
+      renderSttState({ message: '자동 자막은 저장소에서 npm run dev로 실행해야 합니다.' });
+      return;
+    }
+    renderSttState({
+      active: true, status: 'uploading', progress: 0.08,
+      message: `${asset.name} 업로드 중`, assetId: asset.id,
+    });
+    try {
+      const media = await loadBlob(asset.id);
+      if (!media) throw new Error('원본 미디어를 로컬 저장소에서 찾을 수 없습니다.');
+      const response = await fetch('/api/stt/jobs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': asset.mimeType || media.type || 'application/octet-stream',
+          'X-File-Name': encodeURIComponent(asset.name),
+          'X-Asset-Id': asset.id,
+          'X-Asset-Duration': String(asset.duration),
+          'X-Language': 'ko',
+        },
+        body: media,
+      });
+      const job = await apiPayload(response);
+      renderSttState({
+        active: true, status: job.status, progress: job.progress,
+        message: job.demo ? 'Demo STT가 자막 초안을 생성하고 있습니다.' : '음성을 인식하고 있습니다.',
+        id: job.id, provider: job.provider, demo: Boolean(job.demo),
+      });
+      await pollSttJob(job.id);
+    } catch (reason) {
+      renderSttState({
+        active: false, status: 'failed', progress: 1,
+        message: reason instanceof Error ? reason.message : '자동 자막 요청에 실패했습니다.',
+      });
+    }
+  }
+
+  async function pollSttJob(jobId) {
+    if (!state.sttJob.active || state.sttJob.id !== jobId) return;
+    try {
+      const job = await apiPayload(await fetch(`/api/stt/jobs/${jobId}`, { cache: 'no-store' }));
+      if (job.status === 'completed') {
+        clearTimeout(state.sttPollTimer);
+        state.sttProposal = {
+          assetId: state.sttJob.assetId,
+          provider: job.provider,
+          demo: Boolean(job.demo),
+          language: job.result.language,
+          segments: job.result.segments,
+        };
+        renderSttState({
+          active: false, status: 'completed', progress: 1,
+          message: `자막 제안 ${job.result.segments.length}개가 준비되었습니다.`,
+        });
+        return;
+      }
+      if (job.status === 'failed' || job.status === 'cancelled') {
+        clearTimeout(state.sttPollTimer);
+        renderSttState({
+          active: false, status: job.status, progress: 1,
+          message: job.error || (job.status === 'cancelled' ? '자동 자막 작업을 취소했습니다.' : '자동 자막 생성에 실패했습니다.'),
+        });
+        return;
+      }
+      renderSttState({
+        active: true, status: job.status, progress: Math.max(0.2, job.progress || 0),
+        message: job.status === 'queued' ? '작업 대기 중' : '음성을 분석하고 있습니다.',
+      });
+      state.sttPollTimer = window.setTimeout(() => void pollSttJob(jobId), 350);
+    } catch (reason) {
+      clearTimeout(state.sttPollTimer);
+      renderSttState({
+        active: false, status: 'failed', progress: 1,
+        message: reason instanceof Error ? reason.message : 'STT Job 상태를 확인하지 못했습니다.',
+      });
+    }
+  }
+
+  async function cancelAutoCaption() {
+    clearTimeout(state.sttPollTimer);
+    const jobId = state.sttJob.id;
+    renderSttState({ active: false, status: 'cancelled', progress: 1, message: '자동 자막 작업을 취소했습니다.' });
+    if (jobId) await fetch(`/api/stt/jobs/${jobId}`, { method: 'DELETE' }).catch(() => undefined);
+  }
+
+  function captionsFromSttProposal(proposal) {
+    const clips = state.project.clips.filter((clip) => clip.assetId === proposal.assetId);
+    if (!clips.length) return proposal.segments.map((segment) => captionFromCue({ ...segment, source: 'stt' }));
+    return clips.flatMap((clip) => proposal.segments.flatMap((segment) => {
+      const sourceStart = Math.max(segment.start, clip.sourceStart);
+      const sourceEnd = Math.min(segment.end, clip.sourceEnd);
+      if (sourceEnd <= sourceStart) return [];
+      return [captionFromCue({
+        ...segment,
+        source: 'stt',
+        start: clip.timelineStart + sourceStart - clip.sourceStart,
+        end: clip.timelineStart + sourceEnd - clip.sourceStart,
+      })];
+    }));
+  }
+
+  function applySttProposal() {
+    if (!state.sttProposal) return;
+    const captions = captionsFromSttProposal(state.sttProposal);
+    if (!captions.length) {
+      renderSttState({ message: '현재 타임라인 범위에 적용할 자막 구간이 없습니다.' });
+      return;
+    }
+    commit((project) => {
+      project.texts.push(...captions);
+      return project;
+    });
+    state.selection = { kind: 'text', id: captions[0].id };
+    state.playhead = captions[0].start;
+    state.captionMessage = `AI 자막 ${captions.length}개를 타임라인에 적용했습니다.`;
+    state.sttProposal = null;
+    state.sttJob = { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false };
+    renderAll();
+  }
+
+  function dismissSttProposal() {
+    state.sttProposal = null;
+    renderSttState({ active: false, status: 'idle', progress: 0, message: 'AI 자막 제안을 적용하지 않았습니다.', id: '' });
   }
 
   function addText() {
@@ -668,7 +835,7 @@
 
     document.getElementById('inspectorContent').onchange=(event)=>handleInspectorChange(event.target);
     document.getElementById('inspectorContent').oninput=(event)=>{if(event.target.type==='range'||event.target.type==='color')handleInspectorChange(event.target);};
-    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();};
+    document.getElementById('inspectorContent').onclick=(event)=>{const target=event.target.closest('button');if(!target)return;if(target.id==='jsonExport')downloadJson();else if(target.id==='importCaptionsButton')document.getElementById('captionInput').click();else if(target.id==='exportCaptionsButton')exportCaptions();else if(target.id==='autoCaptionButton')void startAutoCaption();else if(target.id==='cancelSttButton')void cancelAutoCaption();else if(target.id==='applySttButton')applySttProposal();else if(target.id==='dismissSttButton')dismissSttProposal();};
     document.getElementById('modalRoot').onclick=async(event)=>{if(event.target.id==='closeModal'){state.exportOpen=false;renderModal();}if(event.target.id==='startExport'){const quality=document.getElementById('exportQuality').value;state.playing=false;syncPreview();try{const blob=await exportVideo(quality);downloadBlob(blob,`${safeName(state.project.title)}.webm`);state.exportProgress={active:false,progress:1,status:'완료'};state.exportOpen=false;renderModal();}catch(reason){state.exportProgress={active:false,progress:0,status:''};renderModal();const error=document.getElementById('exportError');error.textContent=reason.message||'내보내기에 실패했습니다.';error.hidden=false;}}};
 
     window.addEventListener('keydown',(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}else if(event.code==='Space'){event.preventDefault();togglePlayback();}});

@@ -165,7 +165,27 @@ input, select, textarea { color: var(--text); }
 .ai-title h3 { margin: 0; }
 .ai-title small { display: block; margin-top: 1px; color: #7f8b9d; font-size: 7px; }
 .ai-section button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: #101620; color: #8d99aa; font-size: 8px; }
+.ai-section button:hover:not(:disabled) { border-color: #7567c6; background: #17172a; color: #d7d1ff; }
 .ai-section button span { padding: 2px 5px; border-radius: 4px; background: #1c2430; font-size: 6px; }
+.ai-notice, .stt-message { margin: 8px 0 0; padding: 7px 8px; border-radius: 6px; background: rgba(145,121,255,.08); color: #a9a0d5; font-size: 7px; line-height: 1.5; }
+.ai-notice code { color: #d6d0ff; font-family: ui-monospace, monospace; }
+.stt-message.error { background: rgba(255,107,120,.08); color: #ffafb6; }
+.stt-status { margin-top: 9px; padding: 9px; border: 1px solid #302c55; border-radius: 8px; background: rgba(25,22,48,.72); }
+.stt-status > div { display: flex; justify-content: space-between; gap: 8px; color: #aaa2d5; font-size: 7px; }
+.stt-status progress { width: 100%; height: 5px; margin-top: 6px; accent-color: var(--purple); }
+.ai-section .stt-status .danger-action { height: 25px; justify-content: center; border-color: rgba(255,107,120,.3); color: #ff9da6; }
+.stt-proposal { margin-top: 9px; padding: 9px; border: 1px solid #4a417c; border-radius: 9px; background: #141427; }
+.proposal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.proposal-head strong { color: #dcd7ff; font-size: 9px; }
+.proposal-head span { padding: 2px 5px; border-radius: 4px; background: rgba(156,255,99,.09); color: var(--primary); font-size: 6px; }
+.proposal-list { max-height: 120px; margin-top: 7px; overflow-y: auto; }
+.proposal-list > div { position: relative; padding: 6px 28px 6px 0; border-top: 1px solid rgba(255,255,255,.06); }
+.proposal-list time { color: #777095; font-family: ui-monospace, monospace; font-size: 6px; }
+.proposal-list p { margin: 2px 0 0; color: #bcb7d2; font-size: 7px; line-height: 1.45; }
+.proposal-list em { position: absolute; top: 9px; right: 0; color: #6fbc9c; font-size: 6px; font-style: normal; }
+.proposal-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 5px; margin-top: 7px; }
+.ai-section .proposal-actions button { justify-content: center; margin: 0; }
+.ai-section .proposal-actions .apply { border-color: var(--primary); background: var(--primary); color: #0a1207; font-weight: 800; }
 .caption-section { background: linear-gradient(160deg, rgba(88,212,220,.08), transparent 70%); }
 .caption-section .ai-title > span { background: rgba(88,212,220,.13); color: var(--cyan); font-size: 8px; font-weight: 900; }
 .caption-section button { width: 100%; height: 32px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #2d4852; border-radius: 7px; background: #101c23; color: #b9dfe2; font-size: 8px; }

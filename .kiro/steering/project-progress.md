@@ -19,6 +19,8 @@ inclusion: always
 - 클립 분할, 트림, 순서 변경, 삭제
 - 텍스트 오버레이 속성 편집
 - SRT/WebVTT 자막 가져오기, 타임라인 편집, UTF-8 SRT 내보내기
+- 비동기 STT Job API와 mock/webhook Provider Adapter
+- 자동 자막 업로드·진행률·취소·제안 검토·타임라인 승인 적용
 - 50단계 Undo/Redo
 - localStorage 프로젝트 자동 저장과 JSON 다운로드
 - 브라우저 기반 540p/1080p WebM 렌더링 및 오디오 믹싱
@@ -29,7 +31,10 @@ inclusion: always
 - `src/app.js`: 편집기 상태, UI, 미디어 처리, 렌더링을 포함한 애플리케이션 로직
 - `src/styles.css`: 편집기 전체 스타일
 - `scripts/build.mjs`: 분리형 산출물과 독립 실행형 HTML 생성
-- `scripts/serve.mjs`: 로컬 정적 서버
+- `scripts/serve.mjs`: 로컬 정적 서버 및 STT API 실행 진입점
+- `server/app-server.mjs`: 정적 앱과 STT API를 함께 제공하는 HTTP 서버
+- `server/stt-service.mjs`: 비동기 STT Job, mock/webhook Provider, 결과 검증
+- `docs/stt-provider-contract.md`: STT Job 및 외부 Provider 연동 계약
 - `sample-media.svg`: 업로드 검증용 샘플
 - `sample-captions.srt`: 자막 워크플로우 검증용 샘플
 
@@ -44,7 +49,8 @@ npm run build
 2. 미디어 업로드와 자동 타임라인 배치
 3. 프리뷰 표시
 4. 텍스트 또는 자막 편집
-5. WebM 내보내기 완료
+5. 자동 자막 Job 생성 → 제안 검토 → 승인 적용 → Undo
+6. WebM 내보내기 완료
 
 ## 제품 및 아키텍처 원칙
 - 비파괴 편집: 원본은 수정하지 않고 프로젝트 명령과 타임코드만 저장한다.
@@ -54,13 +60,15 @@ npm run build
 - 첫 제품 목표는 긴 대화 영상에서 편집 가능한 세로형 숏폼을 만드는 것이다.
 
 ## 다음 개발 우선순위
-1. STT Provider API 계약과 자동 자막 Job 연결
-2. 침묵 구간 감지 및 삭제 후보 미리보기
-3. 세로 자동 리프레임
-4. 서버 기반 MP4 렌더링
-5. 긴 영상에서 숏폼 후보 자동 생성
+1. 침묵 구간 감지 및 삭제 후보 미리보기
+2. 세로 자동 리프레임
+3. 서버 기반 MP4 렌더링
+4. 긴 영상에서 숏폼 후보 자동 생성
+5. 실제 상용 STT Provider 선택 및 webhook 연결
 
 ## 알려진 제약
 - 브라우저 WebM 렌더링은 영상 길이만큼 실시간 처리 시간이 필요하다.
 - 샌드박스 Chromium에는 CJK 폰트가 없으므로 테스트 스크린샷에서 한글이 네모로 보일 수 있다. 앱에는 Noto Sans KR 웹폰트 폴백이 설정되어 있다.
-- 자동 자막·침묵 감지·리프레임은 아직 AI 서비스와 연결되지 않았다.
+- 기본 STT Provider는 UI/Job 흐름을 검증하는 mock이다. 실제 음성 인식은 `STT_PROVIDER=webhook`과 Provider URL/API 키 설정이 필요하다.
+- 독립 실행형 `file://` HTML에서는 STT API를 사용할 수 없으며, 자동 자막은 `npm run dev`로 실행해야 한다.
+- 침묵 감지·리프레임은 아직 분석 서비스와 연결되지 않았다.

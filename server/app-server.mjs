@@ -1,0 +1,38 @@
+import { createServer } from 'node:http';
+import { readFile, stat } from 'node:fs/promises';
+import { extname, resolve, sep } from 'node:path';
+import { createSttService } from './stt-service.mjs';
+
+const contentTypes = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.srt': 'application/x-subrip; charset=utf-8',
+};
+
+export function createShortformServer({ root, sttService = createSttService() }) {
+  const resolvedRoot = resolve(root);
+  return createServer(async (request, response) => {
+    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    try {
+      if (await sttService.handleRequest(request, response, url)) return;
+      const pathname = decodeURIComponent(url.pathname);
+      let target = resolve(resolvedRoot, `.${pathname === '/' ? '/index.html' : pathname}`);
+      if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${sep}`)) {
+        response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('Forbidden');
+        return;
+      }
+      if ((await stat(target)).isDirectory()) target = resolve(target, 'index.html');
+      response.writeHead(200, {
+        'Content-Type': contentTypes[extname(target)] || 'application/octet-stream',
+        'Cache-Control': 'no-cache',
+      });
+      response.end(await readFile(target));
+    } catch {
+      if (!response.headersSent) response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      if (!response.writableEnded) response.end('Not found');
+    }
+  });
+}
