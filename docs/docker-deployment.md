@@ -1,14 +1,37 @@
-# Docker 실행 및 설정
+# Docker Desktop 실행 및 설정
 
-Shortform Studio는 npm 패키지 설치 없이 Node.js 기본 모듈로 실행됩니다. Docker 이미지는 Node.js 22, FFmpeg, 한국어 자막용 Noto CJK 글꼴을 포함하며 기본 포트는 `2210`입니다.
+Shortform Studio는 npm 설치나 `npm run dev` 없이 Docker Desktop만으로 실행할 수 있습니다. Docker 이미지는 Node.js 22, FFmpeg, 한국어 자막용 Noto CJK 글꼴을 포함하며 기본 포트는 `2210`입니다.
 
-## 빠른 실행
+## Docker Desktop로 시작
+
+1. Docker Desktop을 실행하고 Engine이 준비될 때까지 기다립니다.
+2. 저장소 루트에서 `.env.example`을 `.env`로 복사합니다.
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+macOS/Linux:
+
+```bash
+cp .env.example .env
+```
+
+3. 아래 명령으로 Docker Desktop에 Compose 앱을 생성합니다.
 
 ```bash
 docker compose up --build -d
 ```
 
-브라우저에서 `http://localhost:2210`에 접속합니다.
+최초 생성 후에는 Docker Desktop의 **Containers** 화면에서 `shortform-studio` 앱을 시작·중지·재시작할 수 있습니다. 소스나 `.env`를 바꿨다면 다음 명령으로 이미지를 다시 만들고 컨테이너를 교체하세요.
+
+```bash
+docker compose up -d --build --force-recreate
+```
+
+브라우저에서 `http://localhost:2210`에 접속합니다. 이 흐름에서는 호스트 Node.js, npm 또는 `node_modules`가 필요하지 않습니다.
 
 상태 확인과 종료:
 
@@ -43,7 +66,39 @@ cp .env.example .env
 LLM_PROVIDER=mock
 ```
 
-### OpenAI-compatible LLM
+### Docker Desktop에서 호스트 로컬 LLM 사용
+
+Docker 컨테이너의 `localhost`는 PC가 아니라 컨테이너 자신입니다. Ollama, LM Studio, vLLM처럼 PC에서 실행 중인 OpenAI-compatible 서버에는 Compose가 제공하는 `host.docker.internal` 주소로 연결합니다.
+
+Ollama 기본 포트 예시:
+
+```dotenv
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=http://host.docker.internal:11434/v1
+LLM_MODEL=qwen2.5:7b
+LLM_API_KEY=local-only
+```
+
+LM Studio 기본 포트 예시:
+
+```dotenv
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=http://host.docker.internal:1234/v1
+LLM_MODEL=LM-Studio에-표시된-model-id
+LLM_API_KEY=local-only
+```
+
+`LLM_API_KEY`는 현재 설정 검증상 비어 있으면 안 됩니다. 인증을 요구하지 않는 로컬 서버에는 `local-only`처럼 외부에서 의미 없는 값을 사용하세요. 로컬 LLM 서버가 `/v1/chat/completions`를 지원하고 Docker Desktop 연결을 허용해야 합니다. Ollama/LM Studio가 다른 PC에서의 접속을 차단한다면 해당 앱에서 네트워크 제공 옵션을 켜야 할 수 있습니다.
+
+연결 설정 확인:
+
+```bash
+curl http://localhost:2210/api/llm/health
+```
+
+응답의 `provider`가 `openai-compatible`, `model`이 지정한 모델이고 `configured`가 `true`이면 `.env`가 컨테이너에 적용된 것입니다. 이 health 응답은 자격 증명과 base URL을 노출하지 않으며, 실제 추론 가능 여부는 숏폼 의미 보강을 한 번 실행해 확인합니다.
+
+### 클라우드 OpenAI-compatible LLM
 
 ```dotenv
 LLM_PROVIDER=openai-compatible

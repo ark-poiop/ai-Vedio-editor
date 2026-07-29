@@ -51,6 +51,7 @@ inclusion: always
 - 내보내기 모달 MP4/WebM 선택, FFmpeg capability 안내와 WebM 자동 fallback
 - 독립 실행형 HTML과 강제 다운로드용 `.html.download` 빌드
 - Node.js 22·FFmpeg·Noto CJK를 포함하고 `2210` 포트로 실행하는 Dockerfile·Compose 구성
+- npm 없이 Docker Desktop Containers에서 관리하며 `host.docker.internal`로 호스트 Ollama/LM Studio/vLLM에 연결하는 로컬 LLM 구성
 - 아키텍처 및 28주 개발 계획 문서: `docs/ai-video-editor-development-plan.html`
 
 ## 주요 파일

@@ -71,9 +71,12 @@ function validateProviderUrl(value) {
   } catch {
     throw new Error('LLM_BASE_URL 형식을 확인하세요.');
   }
-  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new Error('LLM_BASE_URL은 HTTPS 또는 loopback HTTP 주소여야 합니다.');
+  const localHttpHosts = new Set([
+    'localhost', '127.0.0.1', '[::1]', 'host.docker.internal',
+  ]);
+  const localHttp = url.protocol === 'http:' && localHttpHosts.has(url.hostname.toLowerCase());
+  if (url.protocol !== 'https:' && !localHttp) {
+    throw new Error('LLM_BASE_URL은 HTTPS 또는 Docker Desktop/loopback HTTP 주소여야 합니다.');
   }
   if (url.username || url.password || url.search || url.hash) throw new Error('LLM_BASE_URL에 자격 증명, query 또는 fragment를 넣을 수 없습니다.');
   return url;
