@@ -104,7 +104,12 @@ function validateRuntimeConfiguration(payload) {
   }
   const model = String(payload.model || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
   if (!model || model.length > 160) throw serviceError('로컬 LLM model ID는 1~160자여야 합니다.');
-  return { baseUrl, model };
+  const rawApiKey = String(payload.apiKey || '');
+  if (rawApiKey.length > 2048 || /[\u0000-\u001f\u007f]/.test(rawApiKey)) {
+    throw serviceError('API key 형식을 확인하세요.');
+  }
+  const apiKey = rawApiKey.trim();
+  return { baseUrl, model, apiKey };
 }
 
 function cleanText(value, maximumLength, field, { required = true } = {}) {
@@ -419,7 +424,7 @@ export function createLlmService({
           LLM_PROVIDER: 'openai-compatible',
           LLM_BASE_URL: config.baseUrl.toString(),
           LLM_MODEL: config.model,
-          LLM_API_KEY: 'local-only',
+          LLM_API_KEY: config.apiKey || 'local-only',
         }, { fetchImpl });
         if (!candidateProvider.available) throw serviceError(candidateProvider.reason || '로컬 LLM 설정을 확인하세요.');
         await probeProvider(candidateProvider, controller.signal);

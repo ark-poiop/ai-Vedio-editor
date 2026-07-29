@@ -1,6 +1,6 @@
 # Docker Desktop 실행 및 설정
 
-Shortform Studio는 npm 설치나 `npm run dev` 없이 Docker Desktop만으로 실행할 수 있습니다. Docker 이미지는 Node.js 22, FFmpeg, 한국어 자막용 Noto CJK 글꼴을 포함하며 기본 포트는 `2210`입니다.
+Shortform Studio는 npm 설치나 `npm run dev` 없이 Docker Desktop만으로 실행할 수 있습니다. Docker 이미지는 Node.js 22, FFmpeg, 한국어 UI·자막용 Noto CJK 글꼴을 포함하며 기본 포트는 `2210`입니다. 포함된 Noto CJK 글꼴은 앱이 웹폰트로 직접 제공하므로 Google Fonts 연결이 차단되어도 한국어 UI가 깨지지 않습니다.
 
 ## Docker Desktop로 시작
 
@@ -102,8 +102,9 @@ curl http://localhost:2210/api/llm/health
 
 - **연결 테스트**: 실제 `/chat/completions`와 앱이 요구하는 JSON 응답 호환성을 확인하며 현재 설정은 바꾸지 않습니다.
 - **테스트 후 적용**: 같은 테스트가 성공한 경우에만 현재 서버 Provider를 즉시 교체합니다.
+- **API Key**: 로컬 서버가 인증을 요구할 때만 입력합니다. 인증이 없으면 비워 둡니다. 입력값은 localStorage·프로젝트 JSON·서버 응답·로그에 저장되지 않고 적용 성공 또는 설정창 종료 시 브라우저 메모리에서도 제거됩니다.
 
-웹에서 적용한 URL과 model ID는 브라우저 저장소나 파일에 기록하지 않고 서버 메모리에만 유지합니다. 컨테이너를 재시작하면 `.env` 값으로 복원되므로 영구 설정은 `.env`에 기록하세요. 웹 화면에는 API key 입력 필드가 없으며 인증이 없는 로컬 LLM에는 서버가 비밀이 아닌 placeholder를 사용합니다.
+웹에서 적용한 URL, model ID와 API key는 파일에 기록하지 않고 서버 메모리에만 유지합니다. 컨테이너를 재시작하면 `.env` 값으로 복원되므로 영구 설정은 `.env`에 기록하세요.
 
 ### 클라우드 OpenAI-compatible LLM
 
@@ -144,7 +145,7 @@ docker compose up -d --build --force-recreate
 
 레이아웃은 패널 경계의 resize handle을 마우스·펜으로 드래그하거나 키보드 방향키로 조절할 수 있습니다. 설정은 브라우저의 `shortform-studio:ui-preference:v1`에 저장되고 프로젝트 JSON에는 섞이지 않습니다.
 
-API 키는 브라우저 설정이나 localStorage에 저장하지 않습니다. 로컬 LLM의 Base URL과 model ID는 설정 화면에서 테스트·임시 적용할 수 있지만 브라우저 저장소나 프로젝트 JSON에는 기록되지 않습니다. 컨테이너 재시작 후에도 유지할 영구 설정과 클라우드 Provider 자격 증명은 Docker `.env` 또는 배포 플랫폼의 secret 환경변수로 관리하세요. 설정 메뉴에는 공개 가능한 Provider 상태와 model 이름, 미설정 원인만 표시됩니다.
+API key는 웹 설정에서 세션 전용으로 입력할 수 있지만 localStorage나 프로젝트 JSON에 저장하지 않습니다. 로컬 LLM의 Base URL·model ID·API key는 설정 화면에서 테스트·임시 적용할 수 있으며, key는 적용 성공 또는 설정창 종료 시 브라우저 메모리에서도 제거됩니다. 컨테이너 재시작 후에도 유지할 영구 설정과 클라우드 Provider 자격 증명은 Docker `.env` 또는 배포 플랫폼의 secret 환경변수로 관리하세요. 설정 메뉴에는 공개 가능한 Provider 상태와 model 이름, 미설정 원인만 표시됩니다.
 
 ## 보안과 운영 제한
 

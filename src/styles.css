@@ -1,7 +1,15 @@
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;700;800;900&display=swap');
 
+@font-face {
+  font-family: "Shortform Noto CJK";
+  src: local("Noto Sans CJK KR"), local("Apple SD Gothic Neo"), url('/assets/NotoSansCJK-Regular.ttc') format('collection');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 100 900;
+}
+
 :root {
-  font-family: Inter, Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  font-family: Inter, Pretendard, "Shortform Noto CJK", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   color: #f5f7fb;
   background: #080b10;
   font-synthesis: none;
@@ -517,7 +525,9 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .server-config-note .llm-connection-presets button { min-height: 25px; border-color: #34516e; background: #0d1824; }
 .llm-connection-fields { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(150px, .65fr); gap: 8px; }
 .llm-connection-fields label { min-width: 0; display: block; }
+.llm-connection-fields label.wide { grid-column: 1 / -1; }
 .llm-connection-fields label > span { display: block; margin-bottom: 5px; color: #8ca1b8; font-size: 7px; font-weight: 750; }
+.llm-connection-fields label > span em { margin-left: 5px; color: #6d8196; font-size: 6px; font-style: normal; font-weight: 600; }
 .llm-connection-fields input { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #344b64; border-radius: 7px; outline: none; background: #09111a; color: #d9e8f8; font-size: 8px; }
 .llm-connection-fields input:focus { border-color: #69aef1; box-shadow: 0 0 0 2px rgba(105,174,241,.12); }
 .server-config-note .llm-connection-help { color: #71869d; }
@@ -534,7 +544,7 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .safe-zone[hidden] { display: none; }
 @media (max-width: 680px) {
   .settings-grid, .settings-toggles, .server-status-grid, .llm-connection-fields { grid-template-columns: 1fr; }
-  .settings-range.wide { grid-column: auto; }
+  .settings-range.wide, .llm-connection-fields label.wide { grid-column: auto; }
 }
 
 

@@ -2,6 +2,9 @@ FROM node:22-bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk ca-certificates \
+  && mkdir -p /app/assets \
+  && cp /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc /app/assets/NotoSansCJK-Regular.ttc \
+  && chown -R node:node /app/assets \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

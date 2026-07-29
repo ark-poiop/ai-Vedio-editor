@@ -34,7 +34,7 @@ inclusion: always
 - Inspector가 프리뷰와 타임라인 옆에서 화면 하단까지 이어지고 타임라인은 Inspector 왼쪽까지만 사용하는 세로 우선 편집 레이아웃
 - 프로젝트·편집·보기 작업을 묶은 접근 가능한 상단 메뉴와 compact toolbar·Safe Zone·reduced motion preference
 - LLM/STT/FFmpeg 상태와 자동 자막 기본 언어를 제공하는 통합 설정 모달(API key는 서버 환경변수 전용)
-- 로컬 LLM URL·model 입력, Ollama/LM Studio preset, 실제 JSON completion 연결 테스트와 메모리 한정 Provider hot-swap
+- 로컬 LLM URL·model·세션 전용 API key 입력, Ollama/LM Studio preset, 실제 JSON completion 연결 테스트와 메모리 한정 Provider hot-swap
 - 설정 모달의 LLM `.env` 입력 절차·복사 예시·미설정 원인 안내와 secret을 제외한 health 구성 메타데이터
 - 최대 6개 후보의 점수·근거 검토, 구간 미리보기, 9:16 Timeline Patch 적용과 Undo/Redo
 - 원본 Blob 또는 장면 디코딩 실패 시 자막·타임라인 기반 graceful fallback
@@ -53,6 +53,7 @@ inclusion: always
 - 독립 실행형 HTML과 강제 다운로드용 `.html.download` 빌드
 - Node.js 22·FFmpeg·Noto CJK를 포함하고 `2210` 포트로 실행하는 Dockerfile·Compose 구성
 - npm 없이 Docker Desktop Containers에서 관리하며 `host.docker.internal`로 호스트 Ollama/LM Studio/vLLM에 연결하는 로컬 LLM 구성
+- Docker 이미지에 포함한 Noto CJK를 `/assets` 웹폰트로 제공해 외부 폰트 연결 없이 한국어 UI 표시
 - 아키텍처 및 28주 개발 계획 문서: `docs/ai-video-editor-development-plan.html`
 
 ## 주요 파일
