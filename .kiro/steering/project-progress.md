@@ -31,8 +31,10 @@ inclusion: always
 - LLM key 비노출, URL·요청/응답 크기·timeout·동시성·strict schema 검증과 취소/stale 응답 차단
 - 별도 localStorage preference로 저장하는 의미 보강 toggle과 Provider 상태·AI badge·summary UI
 - 드래그·방향키로 조절하는 미디어/Inspector 폭과 타임라인 높이, 패널 표시 toggle 및 3개 layout preset
+- Inspector가 프리뷰와 타임라인 옆에서 화면 하단까지 이어지고 타임라인은 Inspector 왼쪽까지만 사용하는 세로 우선 편집 레이아웃
 - 프로젝트·편집·보기 작업을 묶은 접근 가능한 상단 메뉴와 compact toolbar·Safe Zone·reduced motion preference
 - LLM/STT/FFmpeg 상태와 자동 자막 기본 언어를 제공하는 통합 설정 모달(API key는 서버 환경변수 전용)
+- 설정 모달의 LLM `.env` 입력 절차·복사 예시·미설정 원인 안내와 secret을 제외한 health 구성 메타데이터
 - 최대 6개 후보의 점수·근거 검토, 구간 미리보기, 9:16 Timeline Patch 적용과 Undo/Redo
 - 원본 Blob 또는 장면 디코딩 실패 시 자막·타임라인 기반 graceful fallback
 - 브라우저 `AudioContext.decodeAudioData()` + 25ms RMS 윈도우 기반 침묵 감지

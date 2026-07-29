@@ -160,9 +160,9 @@ function validateSemanticOutput(payload, inputCandidates) {
   return results;
 }
 
-function createDisabledProvider(reason = 'LLM Provider가 설정되지 않았습니다.') {
+function createDisabledProvider(reason = 'LLM Provider가 설정되지 않았습니다.', reasonCode = 'provider-disabled') {
   return {
-    name: 'disabled', model: '', demo: false, configured: false, available: false, reason,
+    name: 'disabled', model: '', demo: false, configured: false, available: false, reason, reasonCode,
     async rerank() { throw serviceError(reason, 503); },
   };
 }
@@ -281,12 +281,12 @@ export function createLlmProvider(environment = process.env, { fetchImpl = globa
   if (!providerName || providerName === 'disabled' || providerName === 'none') return createDisabledProvider();
   if (providerName === 'mock') return createMockProvider();
   if (providerName !== 'openai-compatible' && providerName !== 'openai') {
-    return createDisabledProvider(`지원하지 않는 LLM Provider입니다: ${providerName}`);
+    return createDisabledProvider(`지원하지 않는 LLM Provider입니다: ${providerName}`, 'unsupported-provider');
   }
   const apiKey = String(environment.LLM_API_KEY || '').trim();
   const model = String(environment.LLM_MODEL || '').trim();
-  if (!apiKey || !model) return createDisabledProvider('LLM_API_KEY와 LLM_MODEL이 필요합니다.');
-  if (typeof fetchImpl !== 'function') return createDisabledProvider('이 Node.js 런타임은 fetch를 지원하지 않습니다.');
+  if (!apiKey || !model) return createDisabledProvider('LLM_API_KEY와 LLM_MODEL이 필요합니다.', 'missing-credentials');
+  if (typeof fetchImpl !== 'function') return createDisabledProvider('이 Node.js 런타임은 fetch를 지원하지 않습니다.', 'runtime-unsupported');
   try {
     const baseUrl = validateProviderUrl(String(environment.LLM_BASE_URL || 'https://api.openai.com/v1'));
     return createOpenAiCompatibleProvider({
@@ -298,7 +298,7 @@ export function createLlmProvider(environment = process.env, { fetchImpl = globa
       fetchImpl,
     });
   } catch (error) {
-    return createDisabledProvider(error instanceof Error ? error.message : 'LLM Provider 설정을 확인하세요.');
+    return createDisabledProvider(error instanceof Error ? error.message : 'LLM Provider 설정을 확인하세요.', 'invalid-configuration');
   }
 }
 
@@ -320,6 +320,9 @@ export function createLlmService({
         provider: provider.name,
         model: provider.model || '',
         demo: Boolean(provider.demo),
+        reasonCode: provider.reasonCode || '',
+        configurationSource: 'server-environment',
+        restartRequired: true,
         features: ['shortform-rerank', 'title', 'summary', 'reasons'],
       });
       return true;

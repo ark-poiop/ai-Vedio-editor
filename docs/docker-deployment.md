@@ -77,10 +77,11 @@ docker compose up -d --build --force-recreate
 - 자동 자막 기본 언어
 - 숏폼 LLM 의미 보강 사용 여부
 - LLM, STT, FFmpeg 서버 연결 상태
+- LLM 서버 환경변수 설정 위치, 현재 미설정 원인, 복사 가능한 `.env` 예시
 
 레이아웃은 패널 경계의 resize handle을 마우스·펜으로 드래그하거나 키보드 방향키로 조절할 수 있습니다. 설정은 브라우저의 `shortform-studio:ui-preference:v1`에 저장되고 프로젝트 JSON에는 섞이지 않습니다.
 
-API 키, Provider URL, 모델 ID는 브라우저 설정이나 localStorage에 저장하지 않습니다. 해당 값은 반드시 Docker `.env` 또는 배포 플랫폼의 secret 환경변수로 관리합니다. 설정 메뉴에는 공개 가능한 Provider 상태와 model 이름만 표시됩니다.
+API 키, Provider URL, 모델 ID는 브라우저 설정이나 localStorage에 저장하지 않습니다. 설정 화면의 **LLM 정보는 어디에 입력하나요?** 안내에서 `.env` 예시를 복사할 수 있지만 실제 값은 반드시 Docker `.env` 또는 배포 플랫폼의 secret 환경변수로 입력해야 합니다. 서버 환경변수는 실행 중인 프로세스에서 안전하게 변경할 수 없으므로 적용하려면 컨테이너를 다시 생성해야 합니다. 설정 메뉴에는 공개 가능한 Provider 상태와 model 이름, 미설정 원인만 표시됩니다.
 
 ## 보안과 운영 제한
 

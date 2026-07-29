@@ -61,7 +61,8 @@
     sttProposal: null, sttPollTimer: 0,
     llm: {
       semanticAssist: true, healthStatus: 'checking', configured: false, available: false,
-      provider: '', model: '', demo: false, message: 'LLM 서버 상태를 확인하고 있습니다.', controller: null,
+      provider: '', model: '', demo: false, reasonCode: '', configurationSource: 'server-environment', restartRequired: true,
+      message: 'LLM 서버 상태를 확인하고 있습니다.', controller: null,
     },
     shortform: {
       analyzing: false, applying: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
@@ -193,6 +194,26 @@
     state.modalReturnFocus = null;
     renderModal();
     queueMicrotask(() => returnFocus?.isConnected && returnFocus.focus());
+  }
+
+  async function copyLlmEnvExample() {
+    const button = document.getElementById('copyLlmEnvButton');
+    const snippet = [
+      'LLM_PROVIDER=openai-compatible',
+      'LLM_BASE_URL=https://api.openai.com/v1',
+      'LLM_MODEL=replace-with-model-id',
+      'LLM_API_KEY=replace-with-server-secret',
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(snippet);
+      if (button) button.textContent = '설정 예시 복사됨';
+    } catch {
+      if (button) button.textContent = '복사 실패 · 아래 예시를 직접 복사하세요';
+    }
+    window.setTimeout(() => {
+      const current = document.getElementById('copyLlmEnvButton');
+      if (current) current.textContent = '설정 예시 복사';
+    }, 2200);
   }
 
   function bindLayoutResizer(handle) {
@@ -730,7 +751,9 @@
       if (location.protocol === 'file:') {
         state.llm = {
           ...state.llm, healthStatus: 'unavailable', configured: false, available: false,
-          provider: '', model: '', demo: false, message: '단일 HTML에서는 서버 LLM을 사용할 수 없습니다.',
+          provider: '', model: '', demo: false, reasonCode: 'server-unavailable',
+          configurationSource: 'server-environment', restartRequired: true,
+          message: '단일 HTML에서는 서버 LLM을 사용할 수 없습니다.',
         };
         renderInspector();
         return;
@@ -752,6 +775,9 @@
           provider: String(health?.provider || '').slice(0, 80),
           model: String(health?.model || '').slice(0, 160),
           demo: health?.demo === true,
+          reasonCode: String(health?.reasonCode || '').slice(0, 80),
+          configurationSource: health?.configurationSource === 'server-environment' ? 'server-environment' : '',
+          restartRequired: health?.restartRequired !== false,
           message: available
             ? `${health.provider}${health.model ? ` · ${health.model}` : ''} 연결됨${health.demo ? ' · DEMO' : ''}`
             : '서버에 LLM Provider가 설정되지 않았습니다.',
@@ -759,7 +785,9 @@
       } catch {
         state.llm = {
           ...state.llm, healthStatus: 'error', configured: false, available: false,
-          provider: '', model: '', demo: false, message: 'LLM 서버 상태를 확인할 수 없습니다.',
+          provider: '', model: '', demo: false, reasonCode: 'server-unavailable',
+          configurationSource: 'server-environment', restartRequired: true,
+          message: 'LLM 서버 상태를 확인할 수 없습니다.',
         };
       } finally {
         clearTimeout(timeout);
@@ -1426,7 +1454,21 @@
     const stt = state.serverStatus.stt;
     const render = state.serverStatus.render;
     const llmAvailable = state.llm.available;
-    return `<div class="modal-backdrop"><section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><div class="modal-heading"><div><span class="eyebrow">PREFERENCES</span><h2 id="settingsTitle">편집기 설정</h2><p>레이아웃과 AI 작업 방식을 내 환경에 맞게 조정합니다.</p></div><button id="closeSettingsButton" aria-label="설정 닫기">×</button></div><div class="settings-scroll"><section class="settings-group"><div class="settings-group-title"><div><strong>작업 공간</strong><small>패널 경계를 직접 드래그하거나 정확한 크기를 지정하세요.</small></div><button id="resetLayoutButton" class="text-action">기본값 복원</button></div><div class="layout-presets"><button data-layout-preset="balanced"><span>▥</span><strong>균형</strong></button><button data-layout-preset="focus"><span>▣</span><strong>프리뷰 집중</strong></button><button data-layout-preset="timeline"><span>▤</span><strong>타임라인 집중</strong></button></div><div class="settings-grid"><label class="settings-range"><span>미디어 패널 <b>${Math.round(ui.libraryWidth)}px</b></span><input type="range" min="180" max="420" step="2" value="${ui.libraryWidth}" data-ui-setting="libraryWidth"></label><label class="settings-range"><span>속성 패널 <b>${Math.round(ui.inspectorWidth)}px</b></span><input type="range" min="220" max="460" step="2" value="${ui.inspectorWidth}" data-ui-setting="inspectorWidth"></label><label class="settings-range wide"><span>타임라인 높이 <b>${Math.round(ui.timelineHeight)}px</b></span><input type="range" min="150" max="520" step="2" value="${ui.timelineHeight}" data-ui-setting="timelineHeight"></label></div><div class="settings-toggles"><label><span><strong>미디어 패널</strong><small>왼쪽 라이브러리 표시</small></span><input type="checkbox" data-ui-toggle="libraryVisible" ${ui.libraryVisible ? 'checked' : ''}></label><label><span><strong>속성 패널</strong><small>오른쪽 Inspector 표시</small></span><input type="checkbox" data-ui-toggle="inspectorVisible" ${ui.inspectorVisible ? 'checked' : ''}></label><label><span><strong>타임라인</strong><small>하단 편집 영역 표시</small></span><input type="checkbox" data-ui-toggle="timelineVisible" ${ui.timelineVisible ? 'checked' : ''}></label></div></section><section class="settings-group"><div class="settings-group-title"><div><strong>편집 환경</strong><small>프리뷰와 인터페이스 표시 방식을 선택합니다.</small></div></div><div class="settings-toggles"><label><span><strong>Safe Zone 표시</strong><small>자막·UI 안전 영역 가이드</small></span><input type="checkbox" data-ui-toggle="showSafeZone" ${ui.showSafeZone ? 'checked' : ''}></label><label><span><strong>컴팩트 도구 모음</strong><small>아이콘 중심으로 상단 공간 절약</small></span><input type="checkbox" data-ui-toggle="compactToolbar" ${ui.compactToolbar ? 'checked' : ''}></label><label><span><strong>모션 줄이기</strong><small>전환과 강조 애니메이션 최소화</small></span><input type="checkbox" data-ui-toggle="reducedMotion" ${ui.reducedMotion ? 'checked' : ''}></label></div><label class="settings-select"><span>자동 자막 기본 언어</span><select data-ui-setting="transcriptionLanguage"><option value="ko" ${ui.transcriptionLanguage === 'ko' ? 'selected' : ''}>한국어</option><option value="en" ${ui.transcriptionLanguage === 'en' ? 'selected' : ''}>English</option><option value="ja" ${ui.transcriptionLanguage === 'ja' ? 'selected' : ''}>日本語</option></select></label></section><section class="settings-group"><div class="settings-group-title"><div><strong>AI 도움</strong><small>자격 증명은 브라우저가 아닌 Docker/서버 환경변수에서만 관리합니다.</small></div></div><div class="settings-toggles single"><label><span><strong>숏폼 의미 기반 보강</strong><small>LLM으로 순위·제목·요약·근거를 보강</small></span><input type="checkbox" data-setting-semantic ${state.llm.semanticAssist ? 'checked' : ''}></label></div><div class="server-status-grid"><article><div><span>LLM</span>${statusBadge(llmAvailable, state.llm.healthStatus === 'checking' ? '확인 중' : '미설정')}</div><strong>${escapeHtml(state.llm.provider || 'disabled')}</strong><small>${escapeHtml(state.llm.model || state.llm.message)}</small></article><article><div><span>STT</span>${statusBadge(stt.available, stt.message === '확인 전' ? '확인 전' : '사용 불가')}</div><strong>${escapeHtml(stt.provider || '미설정')}</strong><small>${escapeHtml(stt.demo ? 'Demo Provider' : stt.message)}</small></article><article><div><span>MP4</span>${statusBadge(render.available, '사용 불가')}</div><strong>FFmpeg</strong><small>${escapeHtml(render.message)}</small></article></div><div class="server-config-note"><strong>서버 설정</strong><p><code>LLM_PROVIDER</code>, <code>LLM_MODEL</code>, <code>LLM_API_KEY</code>, <code>STT_PROVIDER</code>는 Docker Compose 환경변수로 설정하세요. 비밀 키는 브라우저에 저장하지 않습니다.</p><button id="refreshServerStatusButton" aria-busy="${state.serverStatus.refreshing}" class="${state.serverStatus.refreshing ? 'is-loading' : ''}">${state.serverStatus.refreshing ? '상태 확인 중…' : '서버 상태 새로고침'}</button></div></section></div><div class="settings-actions"><button id="closeSettingsDoneButton" class="button primary">설정 완료</button></div></section></div>`;
+    const llmReasonLabels = {
+      'provider-disabled': 'LLM_PROVIDER가 disabled입니다.',
+      'unsupported-provider': '지원하지 않는 LLM Provider입니다.',
+      'missing-credentials': 'LLM_MODEL 또는 LLM_API_KEY가 비어 있습니다.',
+      'runtime-unsupported': '서버 런타임에서 외부 LLM 요청을 지원하지 않습니다.',
+      'invalid-configuration': 'LLM_BASE_URL 등 서버 설정이 올바르지 않습니다.',
+      'server-unavailable': 'LLM 서버 상태를 확인할 수 없습니다.',
+    };
+    const llmSetupReason = llmAvailable
+      ? `${state.llm.provider}${state.llm.model ? ` · ${state.llm.model}` : ''} 사용 가능`
+      : llmReasonLabels[state.llm.reasonCode] || state.llm.message;
+    return `<div class="modal-backdrop"><section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><div class="modal-heading"><div><span class="eyebrow">PREFERENCES</span><h2 id="settingsTitle">편집기 설정</h2><p>레이아웃과 AI 작업 방식을 내 환경에 맞게 조정합니다.</p></div><button id="closeSettingsButton" aria-label="설정 닫기">×</button></div><div class="settings-scroll"><section class="settings-group"><div class="settings-group-title"><div><strong>작업 공간</strong><small>패널 경계를 직접 드래그하거나 정확한 크기를 지정하세요.</small></div><button id="resetLayoutButton" class="text-action">기본값 복원</button></div><div class="layout-presets"><button data-layout-preset="balanced"><span>▥</span><strong>균형</strong></button><button data-layout-preset="focus"><span>▣</span><strong>프리뷰 집중</strong></button><button data-layout-preset="timeline"><span>▤</span><strong>타임라인 집중</strong></button></div><div class="settings-grid"><label class="settings-range"><span>미디어 패널 <b>${Math.round(ui.libraryWidth)}px</b></span><input type="range" min="180" max="420" step="2" value="${ui.libraryWidth}" data-ui-setting="libraryWidth"></label><label class="settings-range"><span>속성 패널 <b>${Math.round(ui.inspectorWidth)}px</b></span><input type="range" min="220" max="460" step="2" value="${ui.inspectorWidth}" data-ui-setting="inspectorWidth"></label><label class="settings-range wide"><span>타임라인 높이 <b>${Math.round(ui.timelineHeight)}px</b></span><input type="range" min="150" max="520" step="2" value="${ui.timelineHeight}" data-ui-setting="timelineHeight"></label></div><div class="settings-toggles"><label><span><strong>미디어 패널</strong><small>왼쪽 라이브러리 표시</small></span><input type="checkbox" data-ui-toggle="libraryVisible" ${ui.libraryVisible ? 'checked' : ''}></label><label><span><strong>속성 패널</strong><small>오른쪽 Inspector 표시</small></span><input type="checkbox" data-ui-toggle="inspectorVisible" ${ui.inspectorVisible ? 'checked' : ''}></label><label><span><strong>타임라인</strong><small>하단 편집 영역 표시</small></span><input type="checkbox" data-ui-toggle="timelineVisible" ${ui.timelineVisible ? 'checked' : ''}></label></div></section><section class="settings-group"><div class="settings-group-title"><div><strong>편집 환경</strong><small>프리뷰와 인터페이스 표시 방식을 선택합니다.</small></div></div><div class="settings-toggles"><label><span><strong>Safe Zone 표시</strong><small>자막·UI 안전 영역 가이드</small></span><input type="checkbox" data-ui-toggle="showSafeZone" ${ui.showSafeZone ? 'checked' : ''}></label><label><span><strong>컴팩트 도구 모음</strong><small>아이콘 중심으로 상단 공간 절약</small></span><input type="checkbox" data-ui-toggle="compactToolbar" ${ui.compactToolbar ? 'checked' : ''}></label><label><span><strong>모션 줄이기</strong><small>전환과 강조 애니메이션 최소화</small></span><input type="checkbox" data-ui-toggle="reducedMotion" ${ui.reducedMotion ? 'checked' : ''}></label></div><label class="settings-select"><span>자동 자막 기본 언어</span><select data-ui-setting="transcriptionLanguage"><option value="ko" ${ui.transcriptionLanguage === 'ko' ? 'selected' : ''}>한국어</option><option value="en" ${ui.transcriptionLanguage === 'en' ? 'selected' : ''}>English</option><option value="ja" ${ui.transcriptionLanguage === 'ja' ? 'selected' : ''}>日本語</option></select></label></section><section class="settings-group"><div class="settings-group-title"><div><strong>AI 도움</strong><small>자격 증명은 브라우저가 아닌 Docker/서버 환경변수에서만 관리합니다.</small></div></div><div class="settings-toggles single"><label><span><strong>숏폼 의미 기반 보강</strong><small>LLM으로 순위·제목·요약·근거를 보강</small></span><input type="checkbox" data-setting-semantic ${state.llm.semanticAssist ? 'checked' : ''}></label></div><div class="server-status-grid"><article><div><span>LLM</span>${statusBadge(llmAvailable, state.llm.healthStatus === 'checking' ? '확인 중' : '미설정')}</div><strong>${escapeHtml(state.llm.provider || 'disabled')}</strong><small>${escapeHtml(state.llm.model || state.llm.message)}</small></article><article><div><span>STT</span>${statusBadge(stt.available, stt.message === '확인 전' ? '확인 전' : '사용 불가')}</div><strong>${escapeHtml(stt.provider || '미설정')}</strong><small>${escapeHtml(stt.demo ? 'Demo Provider' : stt.message)}</small></article><article><div><span>MP4</span>${statusBadge(render.available, '사용 불가')}</div><strong>FFmpeg</strong><small>${escapeHtml(render.message)}</small></article></div><div class="server-config-note"><div class="server-config-heading"><div><strong>LLM 정보는 어디에 입력하나요?</strong><span>서버 전용 설정 · 변경 후 재시작</span></div></div><p>보안을 위해 이 화면에서는 API 키를 입력하거나 저장하지 않습니다. Docker 실행 폴더의 <code>.env</code> 또는 배포 플랫폼의 secret 환경변수에 아래 값을 입력하세요.</p><ol><li><code>cp .env.example .env</code>로 설정 파일을 만듭니다.</li><li>Provider, URL, model, API key를 채웁니다.</li><li><code>docker compose up -d --build --force-recreate</code>로 재시작합니다.</li></ol><pre>LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=replace-with-model-id
+LLM_API_KEY=replace-with-server-secret</pre><p class="server-config-current"><b>현재 상태</b> ${escapeHtml(llmSetupReason)}</p><div class="server-config-actions"><button id="copyLlmEnvButton" type="button">설정 예시 복사</button><button id="refreshServerStatusButton" type="button" aria-busy="${state.serverStatus.refreshing}" class="${state.serverStatus.refreshing ? 'is-loading' : ''}">${state.serverStatus.refreshing ? '상태 확인 중…' : '서버 상태 새로고침'}</button></div></div></section></div><div class="settings-actions"><button id="closeSettingsDoneButton" class="button primary">설정 완료</button></div></section></div>`;
   }
 
   function renderModal() {
@@ -2831,6 +2873,8 @@
           inspectorVisible: defaultUiPreferences.inspectorVisible,
           timelineVisible: defaultUiPreferences.timelineVisible,
         }, { render: true });
+      } else if (event.target.id === 'copyLlmEnvButton') {
+        void copyLlmEnvExample();
       } else if (event.target.id === 'refreshServerStatusButton') {
         void refreshServerStatus();
       } else if (event.target.id === 'closeModal' && !state.exportProgress.active) {
