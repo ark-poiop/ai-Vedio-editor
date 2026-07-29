@@ -41,19 +41,22 @@ export function createShortformServer({
       if (!response.writableEnded) response.end('Not found');
     }
   });
-  let renderClosePromise;
-  const closeRenderService = () => {
-    renderClosePromise ||= Promise.resolve(renderService.close?.());
-    return renderClosePromise;
+  let servicesClosePromise;
+  const closeServices = () => {
+    servicesClosePromise ||= Promise.all([
+      Promise.resolve(sttService.close?.()),
+      Promise.resolve(renderService.close?.()),
+    ]);
+    return servicesClosePromise;
   };
-  server.once('close', () => { void closeRenderService(); });
+  server.once('close', () => { void closeServices(); });
   server.shutdown = async () => {
     if (server.listening) {
       await new Promise((resolveClose, rejectClose) => {
         server.close((error) => error ? rejectClose(error) : resolveClose());
       });
     }
-    await closeRenderService();
+    await closeServices();
   };
   return server;
 }

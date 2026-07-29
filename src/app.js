@@ -1627,7 +1627,7 @@
       }
       renderSttState({
         active: true, status: job.status, progress: Math.max(0.2, job.progress || 0),
-        message: job.status === 'queued' ? '작업 대기 중' : '음성을 분석하고 있습니다.',
+        message: job.message || (job.status === 'queued' ? '작업 대기 중' : '음성을 분석하고 있습니다.'),
       });
       state.sttPollTimer = window.setTimeout(() => void pollSttJob(jobId), 350);
     } catch (reason) {

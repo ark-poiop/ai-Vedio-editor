@@ -3,7 +3,7 @@ import { createShortformServer } from '../server/app-server.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const port = Number(process.env.PORT || 4173);
-const host = process.env.HOST || '0.0.0.0';
+const host = process.env.HOST || '127.0.0.1';
 const server = createShortformServer({ root });
 
 server.listen(port, host, () => {

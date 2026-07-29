@@ -6,6 +6,6 @@
   "scripts": {
     "dev": "node scripts/serve.mjs",
     "build": "node scripts/build.mjs",
-    "check": "node --check src/app.js && node --check server/stt-service.mjs && node --check server/render-service.mjs && node --check server/app-server.mjs && node --check scripts/serve.mjs"
+    "check": "node --check src/app.js && node --check server/assemblyai-provider.mjs && node --check server/stt-service.mjs && node --check server/render-service.mjs && node --check server/app-server.mjs && node --check scripts/serve.mjs"
   }
 }

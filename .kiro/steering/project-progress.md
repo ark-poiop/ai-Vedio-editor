@@ -19,8 +19,10 @@ inclusion: always
 - 클립 분할, 트림, 순서 변경, 삭제
 - 텍스트 오버레이 속성 편집
 - SRT/WebVTT 자막 가져오기, 타임라인 편집, UTF-8 SRT 내보내기
-- 비동기 STT Job API와 mock/webhook Provider Adapter
-- 자동 자막 업로드·진행률·취소·제안 검토·타임라인 승인 적용
+- 비동기 STT Job API와 mock/webhook/AssemblyAI Provider Adapter
+- AssemblyAI 바이너리 업로드·비동기 polling·모든 terminal path 원격 정리, 한국어 화자 분리 및 canonical segment 정규화
+- Provider timeout·bounded retry·응답 크기 제한·오류 sanitization과 서버 종료 시 active Job 취소
+- 자동 자막 업로드·Provider 진행률·취소·제안 검토·타임라인 승인 적용
 - 선택 영상의 STT 제안 또는 타임라인 자막을 source-time에서 timeline-time으로 매핑하는 숏폼 신호 분석
 - 최대 120개 저해상도 프레임의 색상 시그니처 장면 전환과 기존 침묵 경계를 결합한 15/30/45/60초 후보 생성
 - 훅·발화 밀도·신뢰도·길이·경계·장면 변화 점수화와 시간·텍스트 유사도 기반 중복 억제
@@ -47,7 +49,8 @@ inclusion: always
 - `scripts/build.mjs`: 분리형 산출물과 독립 실행형 HTML 생성
 - `scripts/serve.mjs`: 로컬 정적 서버, STT API, MP4 렌더 API 실행 진입점
 - `server/app-server.mjs`: 정적 앱과 STT·렌더 API를 함께 제공하는 HTTP 서버
-- `server/stt-service.mjs`: 비동기 STT Job, mock/webhook Provider, 결과 검증
+- `server/stt-service.mjs`: 비동기 STT Job, mock/webhook/AssemblyAI Provider 선택, 결과 검증
+- `server/assemblyai-provider.mjs`: AssemblyAI 업로드·transcript polling·취소·retry·결과 정규화
 - `server/render-service.mjs`: FFmpeg capability, 렌더 자산, 비동기 MP4 Job, 타임라인 filter graph
 - `docs/stt-provider-contract.md`: STT Job 및 외부 Provider 연동 계약
 - `sample-media.svg`: 업로드 검증용 샘플
@@ -64,15 +67,17 @@ npm run build
 2. 미디어 업로드와 자동 타임라인 배치
 3. 프리뷰 표시
 4. 텍스트 또는 자막 편집
-5. 자동 자막 Job 생성 → 제안 검토 → 승인 적용 → Undo
-6. 침묵 분석 → 후보 선택·미리보기 → 글로벌 리플 삭제 → Undo
-7. 자동 리프레임 분석 → 키프레임 미리보기·수동 보정 → 9:16 적용 → Undo/Redo
-8. 숏폼 자동 후보 생성 → 점수·근거·접근성 상태 확인 → 구간 미리보기 → 9:16 적용 → Undo/Redo
-9. 후보 검토 중 목표 길이 또는 클립·자막 시간 변경 → 재생 중지와 stale 후보 무효화
-10. 원본 Blob 누락 프로젝트에서 자막 기반 fallback 및 자막 없는 프로젝트에서 목표 길이 visual fallback 확인
-11. MP4 capability 확인 → 자산 업로드 → Job 진행률·취소 → 결과 다운로드
-12. FFmpeg 미지원 환경에서 MP4 비활성 이유와 WebM fallback 확인
-13. WebM 내보내기 완료
+5. 자동 자막 Job 생성 → Provider 진행률 → 제안 검토 → 승인 적용 → Undo
+6. AssemblyAI mock fetch로 upload 422 retry → transcript 생성 → polling → 한국어 화자 segment 정규화
+7. STT Job 취소 및 서버 shutdown → AssemblyAI 원격 transcript DELETE
+8. 침묵 분석 → 후보 선택·미리보기 → 글로벌 리플 삭제 → Undo
+9. 자동 리프레임 분석 → 키프레임 미리보기·수동 보정 → 9:16 적용 → Undo/Redo
+10. 숏폼 자동 후보 생성 → 점수·근거·접근성 상태 확인 → 구간 미리보기 → 9:16 적용 → Undo/Redo
+11. 후보 검토 중 목표 길이 또는 클립·자막 시간 변경 → 재생 중지와 stale 후보 무효화
+12. 원본 Blob 누락 프로젝트에서 자막 기반 fallback 및 자막 없는 프로젝트에서 목표 길이 visual fallback 확인
+13. MP4 capability 확인 → 자산 업로드 → Job 진행률·취소 → 결과 다운로드
+14. FFmpeg 미지원 환경에서 MP4 비활성 이유와 WebM fallback 확인
+15. WebM 내보내기 완료
 
 ## 제품 및 아키텍처 원칙
 - 비파괴 편집: 원본은 수정하지 않고 프로젝트 명령과 타임코드만 저장한다.
@@ -82,9 +87,9 @@ npm run build
 - 첫 제품 목표는 긴 대화 영상에서 편집 가능한 세로형 숏폼을 만드는 것이다.
 
 ## 다음 개발 우선순위
-1. 실제 상용 STT Provider 선택 및 webhook 연결
-2. 의미 기반 후보 품질 고도화를 위한 별도 LLM Provider와 AI Orchestrator 연결
-3. 렌더 Job 영속 저장소·큐·인증·보관 정책과 수평 확장
+1. 의미 기반 후보 품질 고도화를 위한 별도 LLM Provider와 AI Orchestrator 연결
+2. AssemblyAI 실제 한국어 장시간 영상 정확도·비용·화자 분리 벤치마크와 운영 모니터링
+3. 렌더·STT Job 영속 저장소·큐·인증·보관 정책과 수평 확장
 4. 리프레임 다중 피사체 전환·고급 추적과 분석 Worker 최적화
 5. 침묵·장면 분석 파라미터 프리셋과 대용량 미디어용 Worker 최적화
 
@@ -94,7 +99,9 @@ npm run build
 - 렌더 Job은 프로세스당 동시 2개로 제한하지만 API 인증·사용자별 격리는 아직 없다. 공유 배포 전 인증, 소유권, 영속 큐와 보관 정책이 필요하다.
 - 브라우저 WebM 렌더링은 영상 길이만큼 실시간 처리 시간이 필요하다.
 - 샌드박스 Chromium에는 CJK 폰트가 없으므로 테스트 스크린샷에서 한글이 네모로 보일 수 있다. 앱에는 Noto Sans KR 웹폰트 폴백이 설정되어 있다.
-- 기본 STT Provider는 UI/Job 흐름을 검증하는 mock이다. 실제 음성 인식은 `STT_PROVIDER=webhook`과 Provider URL/API 키 설정이 필요하다.
+- 기본 STT Provider는 UI/Job 흐름을 검증하는 mock이다. 실제 음성 인식은 `STT_PROVIDER=assemblyai`와 `ASSEMBLYAI_API_KEY` 또는 generic webhook 설정이 필요하다.
+- AssemblyAI Adapter의 계약·retry·polling·취소는 주입형 mock fetch로 검증했지만 현재 샌드박스에는 API 키와 실제 음성 미디어가 없어 상용 API 정확도·비용·장시간 처리 E2E는 수행하지 못했다.
+- STT 업로드와 Job 상태는 현재 서버 메모리에 저장되며 인증·사용자별 격리·rate limit이 없다. 개발 서버는 기본 loopback이고 공유 배포에는 인증 reverse proxy와 영속 Job 저장소가 필요하다.
 - 독립 실행형 `file://` HTML에서는 STT API를 사용할 수 없으며, 자동 자막은 `npm run dev`로 실행해야 한다.
 - 침묵 감지는 브라우저가 디코딩할 수 있는 미디어 코덱에 한정되며 긴 영상은 현재 메인 스레드에서 분석한다.
 - 자동 리프레임은 `FaceDetector` 지원 시 얼굴을 우선하고, 미지원 시 시각적 중심을 추정하므로 복잡한 다중 피사체 장면은 수동 키프레임 보정이 필요할 수 있다.

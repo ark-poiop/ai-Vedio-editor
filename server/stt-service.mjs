@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { createAssemblyAiProvider } from './assemblyai-provider.mjs';
 
 const DEFAULT_MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
+const MAX_SEGMENT_COUNT = 20000;
+const MAX_SEGMENT_TEXT_LENGTH = 4000;
+const MAX_TRANSCRIPT_TEXT_LENGTH = 4 * 1024 * 1024;
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 function sendJson(response, statusCode, payload) {
@@ -16,6 +20,7 @@ function publicJob(job) {
     id: job.id,
     status: job.status,
     progress: job.progress,
+    message: job.message,
     provider: job.provider,
     demo: job.demo,
     assetId: job.assetId,
@@ -45,19 +50,27 @@ async function readRequestBody(request, maximumBytes) {
 
 function validateSegments(payload, duration) {
   if (!payload || !Array.isArray(payload.segments)) throw new Error('STT Provider가 segments 배열을 반환하지 않았습니다.');
+  if (payload.segments.length > MAX_SEGMENT_COUNT) throw new Error('STT Provider의 자막 구간 수가 허용 한도를 초과했습니다.');
+  const maximumTime = Number.isFinite(Number(duration)) && Number(duration) > 0 ? Number(duration) : Infinity;
+  let totalTextBytes = 0;
   return payload.segments.flatMap((segment) => {
     const start = Number(segment.start);
     const end = Number(segment.end);
     const text = String(segment.text || '').trim();
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) return [];
-    const boundedStart = Math.max(0, Math.min(duration || end, start));
-    const boundedEnd = Math.max(boundedStart + 0.05, Math.min(duration || end, end));
+    totalTextBytes += Buffer.byteLength(text, 'utf8');
+    if (totalTextBytes > MAX_TRANSCRIPT_TEXT_LENGTH) throw new Error('STT Provider의 자막 텍스트가 허용 크기를 초과했습니다.');
+    if (text.length > MAX_SEGMENT_TEXT_LENGTH) throw new Error('STT Provider의 단일 자막이 허용 길이를 초과했습니다.');
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start >= maximumTime || !text) return [];
+    const boundedStart = Math.max(0, start);
+    const boundedEnd = Math.min(maximumTime, end);
+    if (boundedEnd - boundedStart < 0.05) return [];
+    const confidence = Number(segment.confidence);
     return [{
       start: boundedStart,
       end: boundedEnd,
       text,
-      confidence: Number.isFinite(Number(segment.confidence)) ? Number(segment.confidence) : undefined,
-      speaker: segment.speaker ? String(segment.speaker) : undefined,
+      confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : undefined,
+      speaker: segment.speaker ? String(segment.speaker).slice(0, 128) : undefined,
     }];
   }).sort((first, second) => first.start - second.start);
 }
@@ -114,6 +127,15 @@ function createWebhookProvider({ url, apiKey }) {
 export function createSttProvider(environment = process.env) {
   const providerName = (environment.STT_PROVIDER || 'mock').toLowerCase();
   if (providerName === 'mock') return createMockProvider();
+  if (providerName === 'assemblyai') return createAssemblyAiProvider({
+    apiKey: environment.ASSEMBLYAI_API_KEY || environment.STT_PROVIDER_API_KEY,
+    requestTimeoutMs: environment.ASSEMBLYAI_REQUEST_TIMEOUT_MS,
+    uploadTimeoutMs: environment.ASSEMBLYAI_UPLOAD_TIMEOUT_MS,
+    transcriptTimeoutMs: environment.ASSEMBLYAI_TRANSCRIPT_TIMEOUT_MS,
+    pollInitialDelayMs: environment.ASSEMBLYAI_POLL_INTERVAL_MS,
+    speakerLabels: environment.ASSEMBLYAI_SPEAKER_LABELS,
+    speechModels: environment.ASSEMBLYAI_SPEECH_MODELS || 'universal-3-pro,universal-2',
+  });
   if (providerName === 'webhook') return createWebhookProvider({
     url: environment.STT_PROVIDER_URL,
     apiKey: environment.STT_PROVIDER_API_KEY,
@@ -123,11 +145,13 @@ export function createSttProvider(environment = process.env) {
 
 export function createSttService({ provider = createSttProvider(), maximumUploadBytes = DEFAULT_MAX_UPLOAD_BYTES } = {}) {
   const jobs = new Map();
+  let closed = false;
 
   async function processJob(job, media, mimeType) {
     if (job.status === 'cancelled') return;
     job.status = 'processing';
     job.progress = 0.25;
+    job.message = `${provider.name} Provider가 음성을 분석하고 있습니다.`;
     job.updatedAt = new Date().toISOString();
     try {
       const payload = await provider.transcribe({
@@ -137,12 +161,19 @@ export function createSttService({ provider = createSttProvider(), maximumUpload
         duration: job.duration,
         language: job.language,
         signal: job.controller.signal,
+        onProgress(progress, message) {
+          if (job.status === 'cancelled') return;
+          job.progress = Math.min(0.98, Math.max(job.progress, Number(progress) || 0));
+          if (message) job.message = String(message).slice(0, 240);
+          job.updatedAt = new Date().toISOString();
+        },
       });
       if (job.status === 'cancelled') return;
       const segments = validateSegments(payload, job.duration);
       if (!segments.length) throw new Error('인식된 음성 구간이 없습니다.');
       job.status = 'completed';
       job.progress = 1;
+      job.message = `자막 제안 ${segments.length}개가 준비되었습니다.`;
       job.result = {
         language: String(payload.language || job.language),
         duration: job.duration,
@@ -153,40 +184,58 @@ export function createSttService({ provider = createSttProvider(), maximumUpload
       job.status = 'failed';
       job.progress = 1;
       job.error = error instanceof Error ? error.message : 'STT 처리에 실패했습니다.';
+      job.message = job.error;
     } finally {
       job.updatedAt = new Date().toISOString();
       job.controller = undefined;
+      job.processPromise = undefined;
+      job.startTimer = undefined;
     }
   }
 
   async function handleRequest(request, response, url) {
     if (request.method === 'GET' && url.pathname === '/api/stt/health') {
-      sendJson(response, 200, { status: 'ok', provider: provider.name, demo: provider.demo });
+      sendJson(response, closed ? 503 : 200, { status: closed ? 'closed' : 'ok', provider: provider.name, demo: provider.demo });
       return true;
     }
 
     if (request.method === 'POST' && url.pathname === '/api/stt/jobs') {
+      if (closed) {
+        sendJson(response, 503, { error: 'STT 서비스가 종료 중입니다.' });
+        return true;
+      }
       try {
         const mimeType = String(request.headers['content-type'] || 'application/octet-stream').split(';')[0];
         if (!mimeType.startsWith('audio/') && !mimeType.startsWith('video/')) {
           sendJson(response, 415, { error: 'STT는 오디오 또는 영상 파일만 지원합니다.' });
           return true;
         }
-        const media = await readRequestBody(request, maximumUploadBytes);
         const now = new Date().toISOString();
-        const duration = Math.max(0.1, Number(request.headers['x-asset-duration'] || 0));
-        const encodedName = String(request.headers['x-file-name'] || 'media');
+        const duration = Number(request.headers['x-asset-duration']);
+        if (!Number.isFinite(duration) || duration <= 0 || duration > 24 * 60 * 60) {
+          sendJson(response, 400, { error: '미디어 길이는 0초보다 크고 24시간 이하여야 합니다.' });
+          return true;
+        }
+        const encodedName = String(request.headers['x-file-name'] || 'media').slice(0, 1024);
         let fileName = encodedName;
         try { fileName = decodeURIComponent(encodedName); } catch { /* use raw header */ }
+        fileName = fileName.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255) || 'media';
+        const language = String(request.headers['x-language'] || 'ko').trim().toLowerCase();
+        if (!/^[a-z]{2,3}(?:[-_][a-z]{2,4})?$/.test(language)) {
+          sendJson(response, 400, { error: 'STT 언어 코드 형식을 확인하세요.' });
+          return true;
+        }
+        const media = await readRequestBody(request, maximumUploadBytes);
         const job = {
           id: randomUUID(),
           status: 'queued',
           progress: 0,
+          message: 'STT 작업을 준비하고 있습니다.',
           provider: provider.name,
           demo: provider.demo,
-          assetId: String(request.headers['x-asset-id'] || ''),
+          assetId: String(request.headers['x-asset-id'] || '').slice(0, 128),
           fileName,
-          language: String(request.headers['x-language'] || 'ko'),
+          language,
           duration,
           createdAt: now,
           updatedAt: now,
@@ -196,7 +245,9 @@ export function createSttService({ provider = createSttProvider(), maximumUpload
         };
         jobs.set(job.id, job);
         sendJson(response, 202, publicJob(job));
-        setTimeout(() => void processJob(job, media, mimeType), 20);
+        job.startTimer = setTimeout(() => {
+          job.processPromise = processJob(job, media, mimeType);
+        }, 20);
       } catch (error) {
         sendJson(response, error.statusCode || 500, { error: error instanceof Error ? error.message : '업로드에 실패했습니다.' });
       }
@@ -218,7 +269,9 @@ export function createSttService({ provider = createSttProvider(), maximumUpload
       if (!TERMINAL_STATUSES.has(job.status)) {
         job.status = 'cancelled';
         job.progress = 1;
+        job.message = '자동 자막 작업을 취소했습니다.';
         job.updatedAt = new Date().toISOString();
+        clearTimeout(job.startTimer);
         job.controller?.abort();
       }
       sendJson(response, 200, publicJob(job));
@@ -228,5 +281,23 @@ export function createSttService({ provider = createSttProvider(), maximumUpload
     return true;
   }
 
-  return { handleRequest, jobs, provider };
+  async function close() {
+    if (closed) return;
+    closed = true;
+    const pending = [];
+    for (const job of jobs.values()) {
+      if (TERMINAL_STATUSES.has(job.status)) continue;
+      job.status = 'cancelled';
+      job.progress = 1;
+      job.message = '서버 종료로 자동 자막 작업을 취소했습니다.';
+      job.updatedAt = new Date().toISOString();
+      clearTimeout(job.startTimer);
+      job.controller?.abort();
+      if (job.processPromise) pending.push(job.processPromise);
+    }
+    await Promise.allSettled(pending);
+    await provider.close?.();
+  }
+
+  return { handleRequest, close, jobs, provider };
 }
