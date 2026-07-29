@@ -26,6 +26,10 @@ inclusion: always
 - 선택 영상의 STT 제안 또는 타임라인 자막을 source-time에서 timeline-time으로 매핑하는 숏폼 신호 분석
 - 최대 120개 저해상도 프레임의 색상 시그니처 장면 전환과 기존 침묵 경계를 결합한 15/30/45/60초 후보 생성
 - 훅·발화 밀도·신뢰도·길이·경계·장면 변화 점수화와 시간·텍스트 유사도 기반 중복 억제
+- 서버 전용 disabled/mock/OpenAI-compatible LLM Provider와 health·숏폼 rerank API
+- deterministic 후보를 먼저 만든 뒤 의미 점수·순위·제목·요약·근거만 보강하는 AI Orchestrator와 장애 fallback
+- LLM key 비노출, URL·요청/응답 크기·timeout·동시성·strict schema 검증과 취소/stale 응답 차단
+- 별도 localStorage preference로 저장하는 의미 보강 toggle과 Provider 상태·AI badge·summary UI
 - 최대 6개 후보의 점수·근거 검토, 구간 미리보기, 9:16 Timeline Patch 적용과 Undo/Redo
 - 원본 Blob 또는 장면 디코딩 실패 시 자막·타임라인 기반 graceful fallback
 - 브라우저 `AudioContext.decodeAudioData()` + 25ms RMS 윈도우 기반 침묵 감지
@@ -47,12 +51,14 @@ inclusion: always
 - `src/app.js`: 편집기 상태, UI, 미디어 처리, 렌더링을 포함한 애플리케이션 로직
 - `src/styles.css`: 편집기 전체 스타일
 - `scripts/build.mjs`: 분리형 산출물과 독립 실행형 HTML 생성
-- `scripts/serve.mjs`: 로컬 정적 서버, STT API, MP4 렌더 API 실행 진입점
-- `server/app-server.mjs`: 정적 앱과 STT·렌더 API를 함께 제공하는 HTTP 서버
+- `scripts/serve.mjs`: 로컬 정적 서버, STT·LLM API, MP4 렌더 API 실행 진입점
+- `server/app-server.mjs`: 정적 앱과 STT·LLM·렌더 API를 함께 제공하는 HTTP 서버
 - `server/stt-service.mjs`: 비동기 STT Job, mock/webhook/AssemblyAI Provider 선택, 결과 검증
 - `server/assemblyai-provider.mjs`: AssemblyAI 업로드·transcript polling·취소·retry·결과 정규화
+- `server/llm-service.mjs`: 서버 전용 LLM Provider 선택, health/rerank API, schema·보안·동시성 검증
 - `server/render-service.mjs`: FFmpeg capability, 렌더 자산, 비동기 MP4 Job, 타임라인 filter graph
 - `docs/stt-provider-contract.md`: STT Job 및 외부 Provider 연동 계약
+- `docs/llm-provider-contract.md`: LLM 설정, 데이터 최소화, 응답 계약, fallback 및 배포 보안
 - `sample-media.svg`: 업로드 검증용 샘플
 - `sample-captions.srt`: 자막 워크플로우 검증용 샘플
 
@@ -72,12 +78,13 @@ npm run build
 7. STT Job 취소 및 서버 shutdown → AssemblyAI 원격 transcript DELETE
 8. 침묵 분석 → 후보 선택·미리보기 → 글로벌 리플 삭제 → Undo
 9. 자동 리프레임 분석 → 키프레임 미리보기·수동 보정 → 9:16 적용 → Undo/Redo
-10. 숏폼 자동 후보 생성 → 점수·근거·접근성 상태 확인 → 구간 미리보기 → 9:16 적용 → Undo/Redo
-11. 후보 검토 중 목표 길이 또는 클립·자막 시간 변경 → 재생 중지와 stale 후보 무효화
-12. 원본 Blob 누락 프로젝트에서 자막 기반 fallback 및 자막 없는 프로젝트에서 목표 길이 visual fallback 확인
-13. MP4 capability 확인 → 자산 업로드 → Job 진행률·취소 → 결과 다운로드
-14. FFmpeg 미지원 환경에서 MP4 비활성 이유와 WebM fallback 확인
-15. WebM 내보내기 완료
+10. 숏폼 자동 후보 생성 → deterministic 후보 선표시 → LLM 의미 재평가·제목·요약·근거 보강 → 구간 미리보기 → 9:16 적용 → Undo/Redo
+11. LLM disabled·malformed·timeout 시 deterministic fallback, preference 저장, 요청 취소와 stale 응답 차단
+12. 후보 검토 중 목표 길이 또는 클립·자막 시간 변경 → 재생 중지와 stale 후보 무효화
+13. 원본 Blob 누락 프로젝트에서 자막 기반 fallback 및 자막 없는 프로젝트에서 목표 길이 visual fallback 확인
+14. MP4 capability 확인 → 자산 업로드 → Job 진행률·취소 → 결과 다운로드
+15. FFmpeg 미지원 환경에서 MP4 비활성 이유와 WebM fallback 확인
+16. WebM 내보내기 완료
 
 ## 제품 및 아키텍처 원칙
 - 비파괴 편집: 원본은 수정하지 않고 프로젝트 명령과 타임코드만 저장한다.
@@ -87,11 +94,10 @@ npm run build
 - 첫 제품 목표는 긴 대화 영상에서 편집 가능한 세로형 숏폼을 만드는 것이다.
 
 ## 다음 개발 우선순위
-1. 의미 기반 후보 품질 고도화를 위한 별도 LLM Provider와 AI Orchestrator 연결
-2. AssemblyAI 실제 한국어 장시간 영상 정확도·비용·화자 분리 벤치마크와 운영 모니터링
-3. 렌더·STT Job 영속 저장소·큐·인증·보관 정책과 수평 확장
-4. 리프레임 다중 피사체 전환·고급 추적과 분석 Worker 최적화
-5. 침묵·장면 분석 파라미터 프리셋과 대용량 미디어용 Worker 최적화
+1. AssemblyAI + 실제 OpenAI-compatible LLM의 한국어 장시간 영상 정확도·후보 품질·지연·비용 벤치마크와 운영 모니터링
+2. 렌더·STT·LLM Job 영속 저장소·큐·인증·보관 정책과 수평 확장
+3. 리프레임 다중 피사체 전환·고급 추적과 분석 Worker 최적화
+4. 침묵·장면 분석 파라미터 프리셋과 대용량 미디어용 Worker 최적화
 
 ## 알려진 제약
 - 서버 MP4 렌더링에는 `ffmpeg`, `ffprobe`, `drawtext`, H.264 인코더가 필요하다. 현재 샌드박스에는 FFmpeg가 없고 네트워크 정책상 설치할 수 없어 실제 인코딩 E2E 대신 capability·API·filter graph·주입형 Job lifecycle을 검증했다.
@@ -106,5 +112,7 @@ npm run build
 - 침묵 감지는 브라우저가 디코딩할 수 있는 미디어 코덱에 한정되며 긴 영상은 현재 메인 스레드에서 분석한다.
 - 자동 리프레임은 `FaceDetector` 지원 시 얼굴을 우선하고, 미지원 시 시각적 중심을 추정하므로 복잡한 다중 피사체 장면은 수동 키프레임 보정이 필요할 수 있다.
 - 자동 리프레임과 침묵 분석은 현재 메인 스레드에서 실행되며 긴 영상용 Worker 이전이 후속 과제다.
-- 숏폼 후보의 의미 품질은 현재 훅 키워드·발화 밀도·문장 경계·장면 변화의 deterministic 점수화에 기반한다. 실제 주제 이해·요약·브랜드 톤 최적화에는 별도 LLM Provider가 필요하다.
+- LLM Provider의 strict schema·timeout·취소·동시성·secret sanitization은 주입형 mock fetch와 mock Provider로 검증했지만 실제 상용 API 키가 없어 한국어 후보 품질·비용·지연 E2E는 수행하지 못했다. 기본 Provider는 `disabled`이며 `LLM_PROVIDER=mock` 또는 OpenAI-compatible 서버 설정이 필요하다.
+- LLM API는 원본 미디어 대신 후보별 제한 길이 transcript excerpt를 전송하지만 사용자 콘텐츠가 외부 Provider로 전달될 수 있다. 공유 배포 전 Provider 데이터 정책 검토, 사용자 동의, 인증, rate limit, 비용 quota와 관측성이 필요하다.
+- 숏폼 후보의 기본 가용성은 훅 키워드·발화 밀도·문장 경계·장면 변화의 deterministic 점수화로 보장한다. LLM 보강은 순위·제목·요약·근거에 한정하며 장애 시 기본 후보로 fallback한다.
 - 장면 전환 분석은 최대 120개 48×27 프레임의 4×3 RGB 시그니처를 사용하므로 빠른 컷이나 미세한 카메라 변화는 놓칠 수 있다. 원본 Blob·브라우저 코덱을 사용할 수 없으면 자막·타임라인 경계만으로 후보를 생성한다.

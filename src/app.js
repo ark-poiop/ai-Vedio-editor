@@ -3,6 +3,7 @@
 
   const STORAGE_KEY = 'shortform-studio:project:v1';
   const REFRAME_DRAFT_KEY = 'shortform-studio:reframe-draft:v1';
+  const LLM_PREFERENCE_KEY = 'shortform-studio:llm-preference:v1';
   const DB_NAME = 'shortform-studio';
   const DB_STORE = 'media-files';
   const MAX_HISTORY = 50;
@@ -44,6 +45,10 @@
     animation: 0, lastFrameAt: 0, saveTimer: 0, draggedClip: '', captionMessage: '',
     sttJob: { active: false, status: 'idle', progress: 0, message: '', id: '', assetId: '', provider: '', demo: false },
     sttProposal: null, sttPollTimer: 0,
+    llm: {
+      semanticAssist: true, healthStatus: 'checking', configured: false, available: false,
+      provider: '', model: '', demo: false, message: 'LLM 서버 상태를 확인하고 있습니다.', controller: null,
+    },
     shortform: {
       analyzing: false, applying: false, status: 'idle', progress: 0, message: '', assetId: '', analysisVersion: 0,
       targetDuration: 30, candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
@@ -57,6 +62,7 @@
       thresholdDb: -40, minimumDuration: 0.6, padding: 0.12, candidates: [],
     },
   };
+  let llmHealthPromise = null;
 
   function recalculate(project) {
     const clipEnd = project.clips.reduce((max, clip) => Math.max(max, clip.timelineStart + clip.sourceEnd - clip.sourceStart), 0);
@@ -469,7 +475,75 @@
     renderPlayback();
   }
 
+  function cancelLlmRequest() {
+    state.llm.controller?.abort();
+    state.llm.controller = null;
+  }
+
+  function updateLlmPreference(enabled) {
+    state.llm.semanticAssist = Boolean(enabled);
+    if (!state.llm.semanticAssist) cancelLlmRequest();
+    try {
+      localStorage.setItem(LLM_PREFERENCE_KEY, JSON.stringify({ semanticAssist: state.llm.semanticAssist }));
+    } catch {
+      state.llm.message = `${state.llm.message} 설정 저장은 사용할 수 없습니다.`;
+    }
+    renderInspector();
+  }
+
+  function refreshLlmHealth() {
+    if (llmHealthPromise) return llmHealthPromise;
+    const request = (async () => {
+      state.llm.healthStatus = 'checking';
+      state.llm.message = 'LLM 서버 상태를 확인하고 있습니다.';
+      if (document.getElementById('inspectorContent')) renderInspector();
+      if (location.protocol === 'file:') {
+        state.llm = {
+          ...state.llm, healthStatus: 'unavailable', configured: false, available: false,
+          provider: '', model: '', demo: false, message: '단일 HTML에서는 서버 LLM을 사용할 수 없습니다.',
+        };
+        renderInspector();
+        return;
+      }
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 4000);
+      try {
+        const response = await fetch('/api/llm/health', {
+          headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('health unavailable');
+        const health = await response.json();
+        const available = health?.available === true;
+        state.llm = {
+          ...state.llm,
+          healthStatus: available ? 'available' : 'unavailable',
+          configured: health?.configured === true,
+          available,
+          provider: String(health?.provider || '').slice(0, 80),
+          model: String(health?.model || '').slice(0, 160),
+          demo: health?.demo === true,
+          message: available
+            ? `${health.provider}${health.model ? ` · ${health.model}` : ''} 연결됨${health.demo ? ' · DEMO' : ''}`
+            : '서버에 LLM Provider가 설정되지 않았습니다.',
+        };
+      } catch {
+        state.llm = {
+          ...state.llm, healthStatus: 'error', configured: false, available: false,
+          provider: '', model: '', demo: false, message: 'LLM 서버 상태를 확인할 수 없습니다.',
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+      renderInspector();
+    })();
+    llmHealthPromise = request;
+    return request.finally(() => {
+      if (llmHealthPromise === request) llmHealthPromise = null;
+    });
+  }
+
   function invalidateShortformReview(message) {
+    cancelLlmRequest();
     const review = state.shortform;
     if (!review.analyzing && !review.candidates.length && review.status !== 'applied') return;
     stopPlayback();
@@ -785,6 +859,88 @@
     renderInspector();
   }
 
+  async function enrichShortformCandidates(candidates, analysisVersion) {
+    if (state.llm.semanticAssist && state.llm.healthStatus === 'checking') {
+      await refreshLlmHealth();
+      if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
+    }
+    if (!state.llm.semanticAssist || !state.llm.available) {
+      return {
+        candidates,
+        enhanced: false,
+        warning: state.llm.semanticAssist && state.llm.healthStatus !== 'checking'
+          ? ' LLM을 사용할 수 없어 기본 점수를 유지했습니다.'
+          : '',
+      };
+    }
+    const controller = new AbortController();
+    cancelLlmRequest();
+    state.llm.controller = controller;
+    renderShortformState({ progress: 0.92, message: 'LLM이 후보의 의미·제목·근거를 재평가하고 있습니다.' });
+    try {
+      const response = await fetch('/api/llm/shortform/rerank', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          language: 'ko',
+          targetDuration: state.shortform.targetDuration,
+          candidates: candidates.map((candidate) => ({
+            id: candidate.id,
+            score: candidate.score,
+            start: candidate.start,
+            end: candidate.end,
+            title: candidate.title,
+            reasons: candidate.reasons,
+            transcriptExcerpt: candidate.cues.map((cue) => cue.text).join(' ').replace(/\s+/g, ' ').trim().slice(0, 700),
+          })),
+        }),
+      });
+      if (!response.ok) throw new Error(`LLM 요청 실패 (${response.status})`);
+      const payload = await response.json();
+      if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
+      if (!Array.isArray(payload?.candidates) || payload.candidates.length !== candidates.length) throw new Error('LLM 후보 수가 일치하지 않습니다.');
+      const originals = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const seen = new Set();
+      const enriched = payload.candidates.map((candidate, index) => {
+        const original = originals.get(candidate?.id);
+        const score = Number(candidate?.score);
+        const semanticScore = Number(candidate?.semanticScore);
+        const title = typeof candidate?.title === 'string' ? candidate.title.trim() : '';
+        const summary = typeof candidate?.summary === 'string' ? candidate.summary.trim() : '';
+        if (!original || seen.has(candidate.id) || !Number.isFinite(score) || score < 0 || score > 100
+          || !Number.isFinite(semanticScore) || semanticScore < 0 || semanticScore > 100
+          || !title || title.length > 80 || !summary || summary.length > 240
+          || !Array.isArray(candidate.reasons) || !candidate.reasons.length || candidate.reasons.length > 4
+          || candidate.reasons.some((reason) => typeof reason !== 'string' || !reason.trim() || reason.length > 80)) {
+          throw new Error('LLM 후보 응답 형식이 올바르지 않습니다.');
+        }
+        seen.add(candidate.id);
+        return {
+          ...original,
+          score: Math.round(score),
+          deterministicScore: original.score,
+          semanticScore: Math.round(semanticScore),
+          title,
+          summary,
+          reasons: candidate.reasons.map((reason) => reason.trim()),
+          aiEnhanced: true,
+          aiProvider: String(payload.provider || '').slice(0, 80),
+          aiModel: String(payload.model || '').slice(0, 160),
+          rank: Number(candidate.rank) || index + 1,
+        };
+      });
+      if (seen.size !== originals.size) throw new Error('LLM 후보 응답에 누락된 ID가 있습니다.');
+      return { candidates: enriched, enhanced: true, warning: '' };
+    } catch (reason) {
+      if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
+      if (reason?.name === 'AbortError' && state.llm.semanticAssist) throw reason;
+      return { candidates, enhanced: false, warning: ' LLM 보강에 실패해 기본 후보를 유지했습니다.' };
+    } finally {
+      if (state.llm.controller === controller) state.llm.controller = null;
+    }
+  }
+
   async function analyzeShortformCandidates() {
     const asset = getShortformAsset();
     if (state.reframe.analyzing || hasPendingReframe() || state.silence.analyzing || state.sttJob.active) {
@@ -823,11 +979,18 @@
       if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
       const sceneCuts = mapSourcePointsToTimeline(asset.id, sceneSourceCuts);
       const silences = shortformSilenceRanges(asset.id);
-      const candidates = generateShortformCandidates(asset.id, transcript, sceneCuts, silences, state.shortform.targetDuration);
-      if (!candidates.length) throw new Error('현재 타임라인에서 목표 길이에 맞는 후보를 만들 수 없습니다. 목표 길이를 줄여보세요.');
+      const deterministicCandidates = generateShortformCandidates(asset.id, transcript, sceneCuts, silences, state.shortform.targetDuration);
+      if (!deterministicCandidates.length) throw new Error('현재 타임라인에서 목표 길이에 맞는 후보를 만들 수 없습니다. 목표 길이를 줄여보세요.');
+      renderShortformState({
+        analyzing: true, status: 'analyzing', progress: 0.9, candidates: deterministicCandidates,
+        selectedId: deterministicCandidates[0].id, sceneCuts, message: '기본 후보를 만들었습니다. AI 보강 사용 여부를 확인하고 있습니다.',
+      });
+      const enrichment = await enrichShortformCandidates(deterministicCandidates, analysisVersion);
+      if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
+      const candidates = enrichment.candidates;
       renderShortformState({
         analyzing: false, status: 'completed', progress: 1, candidates, selectedId: candidates[0].id, sceneCuts,
-        message: `${candidates.length}개 후보를 만들었습니다. ${transcript.label}${sceneWarning ? ' 기반으로 생성했으며 장면 분석은 생략했습니다.' : '와 장면 변화를 함께 반영했습니다.'}`,
+        message: `${candidates.length}개 후보를 만들었습니다. ${transcript.label}${sceneWarning ? ' 기반으로 생성했으며 장면 분석은 생략했습니다.' : '와 장면 변화를 함께 반영했습니다.'}${enrichment.enhanced ? ' LLM 의미 재평가와 제목 보강을 적용했습니다.' : enrichment.warning}`,
       });
       previewShortformCandidate(candidates[0].id, false);
     } catch (reason) {
@@ -857,6 +1020,7 @@
   }
 
   function clearShortformCandidates(message = '') {
+    cancelLlmRequest();
     stopPlayback();
     renderShortformState({
       analyzing: false, status: 'idle', progress: 0, message, assetId: '', candidates: [], selectedId: '', sceneCuts: [], previewEnd: 0,
@@ -870,6 +1034,7 @@
   }
 
   function updateShortformTarget(value) {
+    cancelLlmRequest();
     const targetDuration = [15, 30, 45, 60].includes(Number(value)) ? Number(value) : 30;
     const hadReview = state.shortform.analyzing || state.shortform.candidates.length > 0;
     stopPlayback();
@@ -883,6 +1048,10 @@
   }
 
   function applyShortformCandidate() {
+    if (state.shortform.analyzing) {
+      renderShortformState({ message: '후보 분석이 끝난 뒤 적용하세요.' });
+      return;
+    }
     if (state.sttJob.active) {
       renderShortformState({ message: '진행 중인 자동 자막 작업을 먼저 완료하거나 취소하세요.' });
       return;
@@ -950,12 +1119,20 @@
     renderAll();
   }
 
+  function renderLlmSettingsSection() {
+    const llm = state.llm;
+    const statusLabel = {
+      checking: '확인 중', available: llm.demo ? 'DEMO' : '연결됨', unavailable: '미설정', error: '오프라인',
+    }[llm.healthStatus] || '미설정';
+    return `<section class="property-section llm-settings-section"><div class="ai-title"><span>AI</span><div><h3>LLM 도움 설정</h3><small>서버 전용 Provider · 키 비노출</small></div><em class="llm-health ${llm.healthStatus}">${statusLabel}</em></div><label class="llm-toggle"><span><strong>의미 기반 후보 보강</strong><small>순위·제목·요약·근거만 보강합니다.</small></span><input type="checkbox" data-llm-preference ${llm.semanticAssist ? 'checked' : ''}></label><div class="llm-provider"><span>${escapeHtml(llm.message)}</span>${llm.provider ? `<small>${escapeHtml(llm.provider)}${llm.model ? ` / ${escapeHtml(llm.model)}` : ''}</small>` : ''}</div><button id="refreshLlmHealthButton" ${llm.healthStatus === 'checking' ? 'disabled' : ''}>연결 상태 새로고침 <span>↻</span></button></section>`;
+  }
+
   function renderShortformSection(asset) {
     const review = state.shortform;
     const selected = review.candidates.find((candidate) => candidate.id === review.selectedId);
     const targetOptions = [15, 30, 45, 60].map((duration) => `<option value="${duration}" ${review.targetDuration === duration ? 'selected' : ''}>${duration}초${duration === 30 ? ' · 추천' : ''}</option>`).join('');
-    const cards = review.candidates.map((candidate) => `<article class="shortform-candidate ${candidate.id === review.selectedId ? 'selected' : ''}"><button type="button" data-preview-shortform="${candidate.id}" aria-pressed="${candidate.id === review.selectedId}"><span class="shortform-rank">#${candidate.rank}</span><span class="shortform-score">${candidate.score}점</span><strong>${escapeHtml(candidate.title)}</strong><time>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)} · ${candidate.duration.toFixed(1)}초</time><small>${candidate.reasons.map((reason) => `<em>${escapeHtml(reason)}</em>`).join('')}</small></button></article>`).join('');
-    return `<section class="property-section shortform-section"><div class="ai-title"><span>◆</span><div><h3>숏폼 후보 생성</h3><small>${asset ? escapeHtml(asset.name) : '타임라인 영상 필요'}</small></div></div><label class="field"><span>목표 길이 <b>${review.targetDuration}초</b></span><select data-shortform-target ${review.analyzing ? 'disabled' : ''}>${targetOptions}</select></label><button id="analyzeShortformButton" class="shortform-analyze" ${!asset || review.analyzing || review.candidates.length || state.sttJob.active || state.silence.analyzing || hasPendingReframe() ? 'disabled' : ''}>${review.analyzing ? '하이라이트 분석 중…' : review.candidates.length ? '후보 검토 중' : '자동 후보 생성'} <span>${review.targetDuration}s</span></button>${review.analyzing ? `<div class="shortform-status"><div role="status" aria-live="polite"><span>${escapeHtml(review.message)}</span><b>${Math.round(review.progress * 100)}%</b></div><progress value="${review.progress}" max="1" aria-label="숏폼 후보 분석 진행률"></progress><button id="cancelShortformButton" class="danger-action">분석 취소</button></div>` : review.message ? `<p class="shortform-message ${review.status === 'failed' ? 'error' : ''}" role="status" aria-live="polite">${escapeHtml(review.message)}</p>` : ''}${review.candidates.length ? `<div class="shortform-review"><div class="shortform-review-head"><strong>추천 후보 ${review.candidates.length}개</strong><span>${escapeHtml(review.candidates[0].signalLabel)}</span></div><p class="shortform-help">점수와 근거를 확인하고 후보를 눌러 해당 구간을 미리보세요.</p><div class="shortform-list">${cards}</div><div class="proposal-actions"><button id="clearShortformButton">다시 생성</button><button id="applyShortformButton" class="apply" ${selected ? '' : 'disabled'}>선택 후보 적용</button></div></div>` : ''}</section>`;
+    const cards = review.candidates.map((candidate) => `<article class="shortform-candidate ${candidate.id === review.selectedId ? 'selected' : ''}"><button type="button" data-preview-shortform="${candidate.id}" aria-pressed="${candidate.id === review.selectedId}" ${review.analyzing ? 'disabled' : ''}><span class="shortform-rank">#${candidate.rank}</span>${candidate.aiEnhanced ? '<span class="shortform-ai-badge">AI 보강</span>' : ''}<span class="shortform-score">${candidate.score}점</span><strong>${escapeHtml(candidate.title)}</strong>${candidate.summary ? `<p>${escapeHtml(candidate.summary)}</p>` : ''}<time>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)} · ${candidate.duration.toFixed(1)}초</time><small>${candidate.reasons.map((reason) => `<em>${escapeHtml(reason)}</em>`).join('')}</small></button></article>`).join('');
+    return `<section class="property-section shortform-section"><div class="ai-title"><span>◆</span><div><h3>숏폼 후보 생성</h3><small>${asset ? escapeHtml(asset.name) : '타임라인 영상 필요'}</small></div></div><label class="field"><span>목표 길이 <b>${review.targetDuration}초</b></span><select data-shortform-target ${review.analyzing ? 'disabled' : ''}>${targetOptions}</select></label><button id="analyzeShortformButton" class="shortform-analyze" ${!asset || review.analyzing || review.candidates.length || state.sttJob.active || state.silence.analyzing || hasPendingReframe() ? 'disabled' : ''}>${review.analyzing ? '하이라이트 분석 중…' : review.candidates.length ? '후보 검토 중' : '자동 후보 생성'} <span>${review.targetDuration}s</span></button>${review.analyzing ? `<div class="shortform-status"><div role="status" aria-live="polite"><span>${escapeHtml(review.message)}</span><b>${Math.round(review.progress * 100)}%</b></div><progress value="${review.progress}" max="1" aria-label="숏폼 후보 분석 진행률"></progress><button id="cancelShortformButton" class="danger-action">분석 취소</button></div>` : review.message ? `<p class="shortform-message ${review.status === 'failed' ? 'error' : ''}" role="status" aria-live="polite">${escapeHtml(review.message)}</p>` : ''}${review.candidates.length ? `<div class="shortform-review"><div class="shortform-review-head"><strong>추천 후보 ${review.candidates.length}개</strong><span>${review.candidates.some((candidate) => candidate.aiEnhanced) ? 'LLM 의미 보강' : escapeHtml(review.candidates[0].signalLabel)}</span></div><p class="shortform-help">점수와 근거를 확인하고 후보를 눌러 해당 구간을 미리보세요.</p><div class="shortform-list">${cards}</div><div class="proposal-actions"><button id="clearShortformButton">다시 생성</button><button id="applyShortformButton" class="apply" ${selected && !review.analyzing ? '' : 'disabled'}>선택 후보 적용</button></div></div>` : ''}</section>`;
   }
 
   function renderInspector() {
@@ -999,6 +1176,7 @@
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section"><div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</section>
       <section class="property-section ai-section"><div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</section>
+      ${renderLlmSettingsSection()}
       ${renderShortformSection(shortformAsset)}
       <section class="property-section reframe-section"><div class="ai-title"><span>▣</span><div><h3>세로 자동 리프레임</h3><small>${reframeAsset ? `${reframeHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(reframeAsset.name)}` : reframeHasBoundAsset ? '분석 대상이 삭제됨' : '가로 영상 필요'}</small></div></div><label class="field"><span>프레임 샘플 간격</span><select data-reframe-setting="sampleInterval" ${reframe.analyzing ? 'disabled' : ''}><option value="0.5" ${reframe.sampleInterval === 0.5 ? 'selected' : ''}>0.5초 · 정밀</option><option value="1" ${reframe.sampleInterval === 1 ? 'selected' : ''}>1초 · 균형</option><option value="2" ${reframe.sampleInterval === 2 ? 'selected' : ''}>2초 · 빠름</option></select></label><button id="analyzeReframeButton" ${!reframeAsset || reframe.analyzing || reframe.keyframes.length || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>${reframe.analyzing ? '피사체 추적 중…' : reframe.keyframes.length ? '키프레임 검토 중' : '세로 구도 분석'} <span>9:16</span></button>${appliedReframeCount && !reframe.keyframes.length ? `<button id="removeReframeButton" class="reframe-remove" data-reframe-asset="${reframeAsset.id}">적용된 리프레임 해제 <span>${appliedReframeCount}개</span></button>` : ''}${reframe.analyzing ? `<div class="reframe-status"><div><span>${escapeHtml(reframe.message)}</span><b>${Math.round(reframe.progress * 100)}%</b></div><progress value="${reframe.progress}" max="1"></progress><button id="cancelReframeButton" class="danger-action">분석 취소</button></div>` : reframe.message ? `<p class="reframe-message ${reframe.status === 'failed' ? 'error' : ''}">${escapeHtml(reframe.message)}</p>` : ''}${reframe.keyframes.length ? `<div class="reframe-review"><div class="reframe-review-head"><strong>포커스 키프레임 ${reframe.keyframes.length}개</strong><span>${reframeMethodLabel}</span></div><p class="reframe-help">시간을 눌러 구도를 확인하고 가로 위치를 직접 보정할 수 있습니다.</p><div class="reframe-keyframes">${reframe.keyframes.map((keyframe, index) => `<div class="reframe-keyframe"><button type="button" data-preview-reframe="${index}">${formatTime(keyframe.time, true)}</button><label><span>가로 ${Math.round(keyframe.x * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(keyframe.x * 100)}" data-reframe-keyframe="${index}" data-reframe-axis="x"></label><em>${Math.round(keyframe.confidence * 100)}%</em></div>`).join('')}</div><div class="proposal-actions"><button id="clearReframeButton">취소</button><button id="applyReframeButton" class="apply">9:16에 적용</button></div></div>` : ''}</section>
       <section class="property-section silence-section"><div class="ai-title"><span>∿</span><div><h3>침묵 구간 감지</h3><small>${silenceAsset ? `${silenceHasBoundAsset ? '분석 대상 · ' : ''}${escapeHtml(silenceAsset.name)}` : silenceHasBoundAsset ? '분석 대상이 삭제됨' : '영상 또는 오디오 필요'}</small></div></div><div class="field-grid silence-settings"><label class="field"><span>임계값 dB</span><input data-silence-field="thresholdDb" type="number" min="-80" max="-5" step="1" value="${silence.thresholdDb}" ${silence.analyzing ? 'disabled' : ''}></label><label class="field"><span>최소 길이 초</span><input data-silence-field="minimumDuration" type="number" min="0.1" max="10" step="0.1" value="${silence.minimumDuration}" ${silence.analyzing ? 'disabled' : ''}></label></div><label class="field"><span>음성 여백 초 <b>${silence.padding.toFixed(2)}</b></span><input data-silence-field="padding" type="range" min="0" max="1" step="0.01" value="${silence.padding}" ${silence.analyzing ? 'disabled' : ''}></label><button id="analyzeSilenceButton" class="silence-analyze" ${!sttAsset || silence.analyzing || silence.candidates.length || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>${silence.analyzing ? '오디오 분석 중…' : silence.candidates.length ? '후보 검토 중' : '침묵 구간 분석'} <span>${silence.thresholdDb} dB</span></button>${silence.analyzing ? `<div class="silence-status"><div><span>${escapeHtml(silence.message)}</span><b>${Math.round(silence.progress * 100)}%</b></div><progress value="${silence.progress}" max="1"></progress></div>` : silence.message ? `<p class="silence-message ${silence.status === 'failed' ? 'error' : ''}">${escapeHtml(silence.message)}</p>` : ''}${silence.candidates.length ? `<div class="silence-review"><div class="silence-review-head"><strong>삭제 후보 ${silence.candidates.length}개</strong><span>${selectedSilences.length}개 선택</span></div><div class="silence-list">${silence.candidates.map((candidate, index) => { const occurrences = candidateTimelineRemovals[index]; const occurrenceDuration = occurrences.reduce((total, range) => total + range.end - range.start, 0); return `<div class="silence-candidate"><label><input type="checkbox" data-silence-candidate="${index}" ${candidate.selected ? 'checked' : ''} ${occurrences.length ? '' : 'disabled'}><span><strong>${formatTime(candidate.start, true)}–${formatTime(candidate.end, true)}</strong><small>${occurrences.length ? `타임라인 ${occurrences.length}곳 · 실제 ${occurrenceDuration.toFixed(2)}초` : '현재 타임라인에 적용 구간 없음'}</small></span></label><div class="silence-occurrences">${occurrences.map((range, occurrenceIndex) => `<button type="button" data-preview-silence="${index}" data-preview-occurrence="${occurrenceIndex}" title="${formatTime(range.start, true)}–${formatTime(range.end, true)}로 이동">${occurrenceIndex + 1}</button>`).join('')}</div></div>`; }).join('')}</div><div class="silence-total"><span>타임라인 ${selectedTimelineRemovals.length}개 구간</span><strong>${selectedSilenceDuration.toFixed(2)}초</strong></div><div class="proposal-actions"><button id="clearSilenceButton">취소</button><button id="applySilenceButton" class="apply" ${selectedTimelineRemovals.length && silenceAsset ? '' : 'disabled'}>리플 삭제 적용</button></div></div>` : ''}</section><button id="jsonExport" class="button json-button">프로젝트 JSON 다운로드</button>`;
@@ -2305,7 +2483,8 @@
 
     document.getElementById('inspectorContent').onchange=(event)=>{
       const target = event.target;
-      if (target.dataset.shortformTarget !== undefined) updateShortformTarget(target.value);
+      if (target.dataset.llmPreference !== undefined) updateLlmPreference(target.checked);
+      else if (target.dataset.shortformTarget !== undefined) updateShortformTarget(target.value);
       else if (target.dataset.reframeSetting) updateReframeSetting(target.value);
       else if (target.dataset.reframeKeyframe !== undefined) {
         updateReframeKeyframe(Number(target.dataset.reframeKeyframe), target.dataset.reframeAxis, target.value, true);
@@ -2326,6 +2505,7 @@
       const target = event.target.closest('button');
       if (!target) return;
       if (target.dataset.previewShortform !== undefined) previewShortformCandidate(target.dataset.previewShortform);
+      else if (target.id === 'refreshLlmHealthButton') void refreshLlmHealth();
       else if (target.dataset.previewReframe !== undefined) previewReframeKeyframe(Number(target.dataset.previewReframe));
       else if (target.dataset.previewSilence !== undefined) previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));
       else if (target.id === 'jsonExport') downloadJson();
@@ -2423,6 +2603,17 @@
 
   async function hydrate() {
     try {
+      const rawPreference = localStorage.getItem(LLM_PREFERENCE_KEY);
+      if (rawPreference) {
+        const preference = JSON.parse(rawPreference);
+        if (typeof preference.semanticAssist === 'boolean') state.llm.semanticAssist = preference.semanticAssist;
+        else localStorage.removeItem(LLM_PREFERENCE_KEY);
+      }
+    } catch {
+      localStorage.removeItem(LLM_PREFERENCE_KEY);
+    }
+
+    try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const project = JSON.parse(raw);
@@ -2464,6 +2655,7 @@
 
     state.saveStatus = 'saved';
     renderAll();
+    void refreshLlmHealth();
   }
 
   mountApp(); renderAll(); void hydrate();

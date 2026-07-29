@@ -9,6 +9,7 @@ const server = createShortformServer({ root });
 server.listen(port, host, () => {
   console.log(`Shortform Studio: http://localhost:${port}`);
   console.log(`STT Provider: ${process.env.STT_PROVIDER || 'mock'}`);
+  console.log(`LLM Provider: ${process.env.LLM_PROVIDER || 'disabled'}`);
 });
 
 let shuttingDown = false;

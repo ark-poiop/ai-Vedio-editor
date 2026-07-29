@@ -376,3 +376,24 @@ input, select, textarea { color: var(--text); }
 .shortform-section .proposal-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 5px; }
 .shortform-section .proposal-actions button { justify-content: center; margin-top: 7px; }
 .shortform-section .proposal-actions .apply { border-color: #ffc268; background: #ffc268; color: #171006; font-weight: 850; }
+
+
+/* server-side LLM assistance */
+.llm-settings-section { background: linear-gradient(160deg, rgba(68,157,255,.08), transparent 72%); }
+.llm-settings-section .ai-title > span { background: rgba(68,157,255,.14); color: #8fc5ff; font-size: 8px; font-weight: 900; }
+.llm-settings-section .ai-title > em { margin-left: auto; padding: 3px 5px; border-radius: 999px; background: rgba(255,255,255,.05); color: #7f8b9d; font-size: 6px; font-style: normal; font-weight: 800; }
+.llm-settings-section .ai-title > em.available { background: rgba(156,255,99,.09); color: #9cff63; }
+.llm-settings-section .ai-title > em.error { background: rgba(255,107,120,.09); color: #ff9da6; }
+.llm-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px; border: 1px solid #293849; border-radius: 8px; background: rgba(13,23,34,.8); }
+.llm-toggle > span { min-width: 0; }
+.llm-toggle strong, .llm-toggle small { display: block; }
+.llm-toggle strong { color: #c6d8eb; font-size: 8px; }
+.llm-toggle small { margin-top: 2px; color: #728397; font-size: 6px; line-height: 1.4; }
+.llm-toggle input { width: 27px; height: 14px; flex: 0 0 auto; accent-color: #579ee7; }
+.llm-provider { margin-top: 7px; padding: 7px 8px; border-radius: 6px; background: rgba(68,157,255,.06); color: #91a9c2; font-size: 7px; line-height: 1.45; }
+.llm-provider span, .llm-provider small { display: block; }
+.llm-provider small { margin-top: 2px; overflow: hidden; color: #66819d; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 6px; text-overflow: ellipsis; white-space: nowrap; }
+.llm-settings-section > button { width: 100%; height: 28px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #2d435a; border-radius: 7px; background: #0e1721; color: #8da8c2; font-size: 7px; }
+.llm-settings-section > button:hover:not(:disabled) { border-color: #579ee7; color: #bfddfb; }
+.shortform-ai-badge { justify-self: start; padding: 1px 4px; border-radius: 999px; background: rgba(104,170,255,.13); color: #8fc5ff; font-size: 6px; font-weight: 850; }
+.shortform-candidate p { grid-column: 1 / -1; margin: 0; color: #aa9a82; font-size: 6px; line-height: 1.45; }
