@@ -577,15 +577,11 @@ export function createRenderService({
           request.on('error', reject);
         });
         // Extract audio as 16kHz mono WAV (smallest useful format for analysis)
-        await new Promise((resolve, reject) => {
-          const proc = processRunner(ffmpegPath, [
-            '-hide_banner', '-y', '-i', inputPath,
-            '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
-            outputPath,
-          ]);
-          proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`FFmpeg 오디오 추출 실패 (code ${code})`)));
-          proc.on('error', reject);
-        });
+        await processRunner(ffmpegPath, [
+          '-hide_banner', '-y', '-i', inputPath,
+          '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+          outputPath,
+        ]);
         const wavStat = await stat(outputPath);
         response.writeHead(200, {
           'Content-Type': 'audio/wav',
