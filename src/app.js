@@ -46,6 +46,37 @@ import {
     renderAll();
   }
 
+  function addTrack(type) {
+    commit((project) => {
+      if (!project.tracks) project.tracks = [
+        { id: 'video', label: 'V1', type: 'video' },
+        { id: 'text', label: 'T1', type: 'text' },
+        { id: 'audio', label: 'A1', type: 'audio' },
+      ];
+      const existing = project.tracks.filter((t) => t.type === type);
+      const num = existing.length + 1;
+      const prefix = type === 'video' ? 'V' : type === 'text' ? 'T' : 'A';
+      const id = `${type}-${uid().slice(0, 8)}`;
+      const label = `${prefix}${num}`;
+      project.tracks.push({ id, label, type });
+      return project;
+    });
+  }
+
+  function removeTrack(trackId) {
+    const track = (state.project.tracks || []).find((t) => t.id === trackId);
+    if (!track) return;
+    // Don't remove if it's the last track of its type
+    const sameType = (state.project.tracks || []).filter((t) => t.type === track.type);
+    if (sameType.length <= 1) return;
+    commit((project) => {
+      project.tracks = (project.tracks || []).filter((t) => t.id !== trackId);
+      project.clips = project.clips.filter((c) => c.trackId !== trackId);
+      if (track.type === 'text') project.texts = project.texts.filter((t) => (t.trackId || 'text') !== trackId);
+      return project;
+    });
+  }
+
   /** Timeline duration of a clip accounting for speed */
   function clipDuration(clip) { return (clip.sourceEnd - clip.sourceStart) / (clip.speed || 1); }
   /** Source time at given timeline time for a clip accounting for speed */
@@ -1544,9 +1575,23 @@ import {
       const waveformSvg = asset?.waveform && track === 'audio' ? `<svg class="clip-waveform" viewBox="0 0 128 32" preserveAspectRatio="none">${asset.waveform.map((v, i) => `<rect x="${i}" y="${16 - v * 15}" width="1" height="${v * 30 || 0.5}"/>`).join('')}</svg>` : '';
       return `<div class="timeline-clip ${track} ${isSelected('clip', clip.id) ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}${waveformSvg}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
     }).join('');
-    const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${isSelected('text', text.id) ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
     document.getElementById('timelineContent').style.width = `${width + LABEL_WIDTH}px`;
-    document.getElementById('timelineContent').innerHTML = `<div class="timeline-label-spacer">TIME</div><div class="timeline-ruler" style="margin-left:${LABEL_WIDTH}px;width:${width}px">${ruler}</div><div class="playhead" style="left:${LABEL_WIDTH + state.playhead * state.zoom}px"><i></i><span></span></div><div class="track-row"><div class="track-label"><b>V1</b><span>영상</span></div><div class="track-lane" style="width:${width}px">${clips('video')}</div></div><div class="track-row text-track"><div class="track-label"><b>T1</b><span>텍스트·자막</span></div><div class="track-lane" style="width:${width}px">${texts}</div></div><div class="track-row"><div class="track-label"><b>A1</b><span>오디오</span></div><div class="track-lane" style="width:${width}px">${clips('audio')}</div></div>`;
+    const tracks = state.project.tracks || [
+      { id: 'video', label: 'V1', type: 'video' },
+      { id: 'text', label: 'T1', type: 'text' },
+      { id: 'audio', label: 'A1', type: 'audio' },
+    ];
+    const trackRows = tracks.map((track) => {
+      if (track.type === 'text') {
+        const trackTexts = state.project.texts.filter((t) => (t.trackId || 'text') === track.id);
+        const textHtml = trackTexts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${isSelected('text', text.id) ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
+        return `<div class="track-row text-track" data-track-id="${track.id}"><div class="track-label"><b>${escapeHtml(track.label)}</b><span>텍스트·자막</span></div><div class="track-lane" style="width:${width}px">${textHtml}</div></div>`;
+      }
+      const trackClips = clips(track.id);
+      const typeLabel = track.type === 'video' ? '영상' : '오디오';
+      return `<div class="track-row" data-track-id="${track.id}"><div class="track-label"><b>${escapeHtml(track.label)}</b><span>${typeLabel}</span></div><div class="track-lane" style="width:${width}px">${trackClips}</div></div>`;
+    }).join('');
+    document.getElementById('timelineContent').innerHTML = `<div class="timeline-label-spacer">TIME</div><div class="timeline-ruler" style="margin-left:${LABEL_WIDTH}px;width:${width}px">${ruler}</div><div class="playhead" style="left:${LABEL_WIDTH + state.playhead * state.zoom}px"><i></i><span></span></div>${trackRows}<div class="track-actions"><button id="addTrackButton" class="small-action" title="트랙 추가">+ 트랙</button></div>`;
     document.getElementById('elementCount').textContent = `${state.project.clips.length + state.project.texts.length}개 요소`;
     document.getElementById('zoomInput').value = state.zoom;
   }
@@ -3092,10 +3137,69 @@ import {
     document.getElementById('assetList').onclick=(event)=>{const add=event.target.closest('[data-add-asset]'),remove=event.target.closest('[data-remove-asset]'),select=event.target.closest('[data-select-asset]');if(add){event.stopPropagation();addAssetToTimeline(add.dataset.addAsset);}else if(remove){event.stopPropagation();void removeAsset(remove.dataset.removeAsset);}else if(select){state.selection={kind:'asset',id:select.dataset.selectAsset};renderAll();}};
     document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){state.selection={kind:'text',id:target.dataset.selectText};renderAll();}};
     const timeline=document.getElementById('timelineScroll');
-    timeline.onclick=(event)=>{const clip=event.target.closest('[data-select-clip]'),text=event.target.closest('[data-select-text]');if(clip){const kind='clip',id=clip.dataset.selectClip;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}if(text){const kind='text',id=text.dataset.selectText;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}const rect=timeline.getBoundingClientRect();seek((event.clientX-rect.left+timeline.scrollLeft-LABEL_WIDTH)/state.zoom);};
-    timeline.ondragstart=(event)=>{const clip=event.target.closest('[data-select-clip]');if(clip)state.draggedClip=clip.dataset.selectClip;};
-    timeline.ondragover=(event)=>event.preventDefault();timeline.ondrop=(event)=>{const target=event.target.closest('[data-select-clip]');if(!target||!state.draggedClip)return;const sourceId=state.draggedClip,targetId=target.dataset.selectClip;commit((project)=>{const source=project.clips.find((c)=>c.id===sourceId),destination=project.clips.find((c)=>c.id===targetId);if(!source||!destination||source.trackId!==destination.trackId)return project;const ordered=project.clips.filter((c)=>c.trackId===source.trackId).sort((a,b)=>a.timelineStart-b.timelineStart);const from=ordered.findIndex((c)=>c.id===sourceId),to=ordered.findIndex((c)=>c.id===targetId);ordered.splice(to,0,ordered.splice(from,1)[0]);let cursor=0;ordered.forEach((c)=>{c.timelineStart=cursor;cursor+=c.sourceEnd-c.sourceStart;});return project;});state.draggedClip='';};
-    timeline.onpointerdown=(event)=>{const handle=event.target.closest('[data-trim]');if(!handle)return;event.preventDefault();event.stopPropagation();const clip=state.project.clips.find((item)=>item.id===handle.dataset.clip);if(!clip)return;const startX=event.clientX,startSource=clip.sourceStart,endSource=clip.sourceEnd,startTimeline=clip.timelineStart;window.addEventListener('pointerup',(up)=>{const delta=(up.clientX-startX)/state.zoom;commit((project)=>{const current=project.clips.find((item)=>item.id===clip.id);if(!current)return project;if(handle.dataset.trim==='start'){const bounded=Math.max(-startSource,Math.min(endSource-startSource-.1,delta));current.sourceStart=startSource+bounded;current.timelineStart=startTimeline+bounded;}else current.sourceEnd=Math.max(startSource+.1,endSource+delta);return project;});},{once:true});};
+    timeline.onclick=(event)=>{if(event.target.id==='addTrackButton'){const type=prompt('추가할 트랙 종류를 선택하세요:\nvideo, text, audio','video');if(type&&['video','text','audio'].includes(type))addTrack(type);return;}if(event.target.closest('[data-remove-track]')){removeTrack(event.target.closest('[data-remove-track]').dataset.removeTrack);return;}const clip=event.target.closest('[data-select-clip]'),text=event.target.closest('[data-select-text]');if(clip){const kind='clip',id=clip.dataset.selectClip;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}if(text){const kind='text',id=text.dataset.selectText;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}const rect=timeline.getBoundingClientRect();seek((event.clientX-rect.left+timeline.scrollLeft-LABEL_WIDTH)/state.zoom);};
+    timeline.ondragstart=(event)=>event.preventDefault();
+    timeline.ondragover=(event)=>event.preventDefault();
+    timeline.ondrop=(event)=>event.preventDefault();
+    // ─── Clip drag-move & rubber-band selection ─────────────────────────────
+    timeline.onmousedown=(event)=>{
+      if(event.button!==0)return;
+      const handle=event.target.closest('[data-trim]');
+      if(handle){event.preventDefault();event.stopPropagation();const clip=state.project.clips.find((item)=>item.id===handle.dataset.clip);if(!clip)return;const startX=event.clientX,startSource=clip.sourceStart,endSource=clip.sourceEnd,startTimeline=clip.timelineStart;window.addEventListener('pointerup',(up)=>{const delta=(up.clientX-startX)/state.zoom;commit((project)=>{const current=project.clips.find((item)=>item.id===clip.id);if(!current)return project;if(handle.dataset.trim==='start'){const bounded=Math.max(-startSource,Math.min(endSource-startSource-.1,delta));current.sourceStart=startSource+bounded;current.timelineStart=startTimeline+bounded;}else current.sourceEnd=Math.max(startSource+.1,endSource+delta);return project;});},{once:true});return;}
+      const clipEl=event.target.closest('[data-select-clip]');
+      const textEl=event.target.closest('[data-select-text]');
+      if(clipEl||textEl){
+        // Clip/text drag move
+        event.preventDefault();
+        const id=clipEl?clipEl.dataset.selectClip:textEl.dataset.selectText;
+        const kind=clipEl?'clip':'text';
+        if(!isSelected(kind,id))selectSingle(kind,id);
+        const startX=event.clientX;
+        const startPositions=state.selections.map((s)=>{
+          if(s.kind==='clip'){const c=state.project.clips.find((i)=>i.id===s.id);return{...s,start:c?.timelineStart||0};}
+          const t=state.project.texts.find((i)=>i.id===s.id);return{...s,start:t?.start||0};
+        });
+        let moved=false;
+        const onMove=(e)=>{const delta=(e.clientX-startX)/state.zoom;if(Math.abs(delta)<0.05)return;moved=true;
+          for(const sp of startPositions){
+            if(sp.kind==='clip'){const c=state.project.clips.find((i)=>i.id===sp.id);if(c)c.timelineStart=Math.max(0,sp.start+delta);}
+            else{const t=state.project.texts.find((i)=>i.id===sp.id);if(t){const dur=t.end-t.start;t.start=Math.max(0,sp.start+delta);t.end=t.start+dur;}}
+          }
+          state.project=recalculate(state.project);renderTimeline();renderPlayback();
+        };
+        const onUp=()=>{window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);
+          if(moved){state.past.push(clone(state.project));if(state.past.length>MAX_HISTORY)state.past.shift();state.future=[];scheduleSave();}
+          renderAll();
+        };
+        window.addEventListener('mousemove',onMove);window.addEventListener('mouseup',onUp);
+        return;
+      }
+      // Rubber-band selection on empty area
+      const lane=event.target.closest('.track-lane');
+      if(!lane)return;
+      event.preventDefault();
+      const rect=timeline.getBoundingClientRect();
+      const startX=event.clientX;const startScrollLeft=timeline.scrollLeft;
+      const band=document.createElement('div');band.className='rubber-band';band.style.cssText=`position:absolute;top:0;bottom:0;background:rgba(156,255,99,.08);border:1px solid rgba(156,255,99,.4);pointer-events:none;z-index:10;`;
+      timeline.style.position='relative';timeline.appendChild(band);
+      const baseLeft=startX-rect.left+startScrollLeft-LABEL_WIDTH;
+      band.style.left=`${LABEL_WIDTH+baseLeft}px`;band.style.width='0';
+      const onMove=(e)=>{
+        const currentLeft=e.clientX-rect.left+timeline.scrollLeft-LABEL_WIDTH;
+        const left=Math.min(baseLeft,currentLeft);const w=Math.abs(currentLeft-baseLeft);
+        band.style.left=`${LABEL_WIDTH+left}px`;band.style.width=`${w}px`;
+        // Select clips/texts within band
+        const tStart=left/state.zoom,tEnd=(left+w)/state.zoom;
+        const selected=[];
+        state.project.clips.forEach((c)=>{const cEnd=c.timelineStart+clipDuration(c);if(c.timelineStart<tEnd&&cEnd>tStart)selected.push({kind:'clip',id:c.id});});
+        state.project.texts.forEach((t)=>{if(t.start<tEnd&&t.end>tStart)selected.push({kind:'text',id:t.id});});
+        state.selections=selected;state.selection=selected.at(-1)||null;
+        renderTimeline();
+      };
+      const onUp=()=>{window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);band.remove();renderAll();};
+      window.addEventListener('mousemove',onMove);window.addEventListener('mouseup',onUp);
+    };
+    timeline.onpointerdown=(event)=>{/* trim handled in onmousedown above */};
 
     document.getElementById('inspectorContent').onchange=(event)=>{
       const target = event.target;

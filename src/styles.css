@@ -302,6 +302,9 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .track-label span { color: #606c7d; font-size: var(--fs-2xs); }
 .track-lane { position: relative; border-bottom: 1px solid #181f2a; background-image: linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px); background-size: 90px 100%; }
 .text-track { height: 54px; }
+.track-actions { padding: 6px 0 6px 88px; }
+.track-actions button { padding: 4px 12px; border: 1px dashed var(--line-bright); border-radius: 5px; background: none; color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.track-actions button:hover { border-color: var(--primary); color: var(--primary); }
 .timeline-clip { position: absolute; top: 7px; bottom: 7px; min-width: 18px; display: flex; align-items: center; overflow: hidden; border: 1px solid #6555b6; border-radius: 6px; background: #2a2354; cursor: grab; }
 .timeline-clip.video { background: linear-gradient(90deg, #27204c, #332866); }
 .timeline-clip.audio { border-color: #31828a; background: #163c42; }

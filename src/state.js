@@ -46,6 +46,11 @@ export const formatSize = (bytes) => bytes < 1024 * 1024
 export const emptyProject = () => ({
   id: uid(), schemaVersion: 1, title: '새 숏폼 프로젝트',
   canvas: { ratio: '9:16', ...ratios['9:16'], background: '#11151d' },
+  tracks: [
+    { id: 'video', label: 'V1', type: 'video' },
+    { id: 'text', label: 'T1', type: 'text' },
+    { id: 'audio', label: 'A1', type: 'audio' },
+  ],
   assets: [], clips: [], texts: [], duration: 30, updatedAt: new Date().toISOString(),
 });
 
