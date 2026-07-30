@@ -3098,7 +3098,15 @@ import {
         updateReframeKeyframe(Number(target.dataset.reframeKeyframe), target.dataset.reframeAxis, target.value);
         const label = target.closest('label')?.querySelector('span');
         if (label) label.textContent = `가로 ${Math.round(Number(target.value))}%`;
-      } else if(target.type==='range'||target.type==='color') handleInspectorChange(target);
+      } else if(target.type==='range'||target.type==='color'||target.type==='number') {
+        handleInspectorChange(target);
+        // Sync sibling inputs with same data-field (range ↔ number)
+        const field = target.dataset.field;
+        if (field) {
+          const siblings = target.closest('.range-with-input')?.querySelectorAll(`[data-field="${field}"]`);
+          if (siblings) siblings.forEach((el) => { if (el !== target) el.value = target.value; });
+        }
+      }
     };
     document.getElementById('inspectorContent').onclick = (event) => {
       const accordionHead = event.target.closest('[data-accordion]');
