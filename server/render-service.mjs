@@ -395,9 +395,9 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
         ? `(w*${(text.x / 100).toFixed(4)}-text_w)`
         : `(w*${(text.x / 100).toFixed(4)}-text_w/2)`;
     const y = `(h*${(text.y / 100).toFixed(4)}-text_h/2)`;
-    const fontStyle = text.fontWeight >= 700 ? 'Bold' : text.fontWeight >= 600 ? 'SemiBold' : 'Regular';
+    const fontFile = '/app/assets/NotoSansCJK-Regular.ttc';
     const drawtext = [
-      `drawtext=font='Sans\\:style=${fontStyle}'`,
+      `drawtext=fontfile='${fontFile}'`,
       `text='${escapeDrawtext(text.text)}'`,
       'expansion=none',
       `fontcolor=${ffmpegColor(text.color, '0xffffff@1')}`,
