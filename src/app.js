@@ -2983,7 +2983,7 @@ import {
         const time = Math.min(state.project.duration, (performance.now() - started) / 1000);
         context.fillStyle = state.project.canvas.background;
         context.fillRect(0, 0, width, height);
-        const clip = state.project.clips.find((item) => item.trackId === 'video' && time >= item.timelineStart && time < item.timelineStart + clipDuration(item));
+        const clip = state.project.clips.find((item) => item.trackId === 'video' && time >= item.timelineStart && time <= item.timelineStart + clipDuration(item));
         for (const [id, element] of elements) {
           if (element instanceof HTMLVideoElement && id !== clip?.assetId) element.pause();
         }
@@ -2996,7 +2996,8 @@ import {
             if (activeId !== clip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
             element.volume = clipVolume(clip, time);
             if (element.paused) void element.play();
-            if (element.readyState >= 2) {
+            // Always draw if we have any frame (readyState >= 1), not just >= 2
+            if (element.readyState >= 1) {
               const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
               if (trans && trans.type.startsWith('wipe')) {
                 const wipeX = trans.type === 'wipe-left' ? width * trans.progress : width * (1 - trans.progress);
@@ -3012,7 +3013,7 @@ import {
           context.globalAlpha = 1;
         }
 
-        const audioClip = state.project.clips.find((item) => item.trackId === 'audio' && time >= item.timelineStart && time < item.timelineStart + clipDuration(item));
+        const audioClip = state.project.clips.find((item) => item.trackId === 'audio' && time >= item.timelineStart && time <= item.timelineStart + clipDuration(item));
         const activeVideoElement = clip && elements.get(clip.assetId);
         if (activeVideoElement instanceof HTMLVideoElement) activeVideoElement.muted = Boolean(audioClip);
         for (const [id, element] of audioElements) {
