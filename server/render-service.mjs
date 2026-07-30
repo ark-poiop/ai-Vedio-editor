@@ -359,7 +359,8 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
     filters.push(`[${inputIndex}:v]${trim},setpts=PTS-STARTPTS,${scale},${crop},fps=30,format=yuv420p[${prepared}]`);
     filters.push(`[${prepared}]setpts=PTS+${clip.timelineStart.toFixed(6)}/TB[${shifted}]`);
     const clipEnd = clip.timelineStart + clipDuration;
-    filters.push(`[${videoLabel}][${shifted}]overlay=x=0:y=0:eof_action=pass:repeatlast=0:shortest=0:enable='between(t,${clip.timelineStart.toFixed(6)},${clipEnd.toFixed(6)})'[${nextBase}]`);
+    // Extend enable end by 1 frame (1/30s) to prevent gap at boundaries
+    filters.push(`[${videoLabel}][${shifted}]overlay=x=0:y=0:eof_action=pass:repeatlast=1:shortest=0:enable='between(t,${clip.timelineStart.toFixed(6)},${(clipEnd + 0.034).toFixed(6)})'[${nextBase}]`);
     videoLabel = nextBase;
     videoCount += 1;
   }
