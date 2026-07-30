@@ -1570,6 +1570,38 @@ import {
     state.selection = null;
   }
 
+  function duplicateSelection() {
+    if (!state.selection) return;
+    const selection = state.selection;
+    if (selection.kind === 'clip') {
+      const original = state.project.clips.find((item) => item.id === selection.id);
+      if (!original) return;
+      const duration = original.sourceEnd - original.sourceStart;
+      const newId = uid();
+      commit((project) => {
+        const clip = project.clips.find((item) => item.id === original.id);
+        if (!clip) return project;
+        const newClip = { ...clone(clip), id: newId, timelineStart: clip.timelineStart + duration };
+        project.clips.push(newClip);
+        return project;
+      });
+      state.selection = { kind: 'clip', id: newId };
+    } else if (selection.kind === 'text') {
+      const original = state.project.texts.find((item) => item.id === selection.id);
+      if (!original) return;
+      const duration = original.end - original.start;
+      const newId = uid();
+      commit((project) => {
+        const text = project.texts.find((item) => item.id === original.id);
+        if (!text) return project;
+        const newText = { ...clone(text), id: newId, start: text.end, end: text.end + duration };
+        project.texts.push(newText);
+        return project;
+      });
+      state.selection = { kind: 'text', id: newId };
+    }
+  }
+
   function parseSubtitleTime(value) {
     const parts = value.trim().replace(',', '.').split(':').map(Number);
     if (parts.some((part) => !Number.isFinite(part)) || (parts.length !== 2 && parts.length !== 3)) {
@@ -3018,6 +3050,7 @@ import {
       if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;
       if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}
       else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'){event.preventDefault();redo();}
+      else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='d'){event.preventDefault();duplicateSelection();}
       else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}
       else if(event.key.toLowerCase()==='s'&&!(event.ctrlKey||event.metaKey)){event.preventDefault();splitSelected();}
       else if(event.code==='Space'){event.preventDefault();togglePlayback();}
