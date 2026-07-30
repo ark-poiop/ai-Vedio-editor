@@ -11,6 +11,33 @@ import {
   const state = createState();
   let llmHealthPromise = null;
 
+  // ─── Multi-selection helpers ────────────────────────────────────────────────
+  function isSelected(kind, id) {
+    return state.selections.some((s) => s.kind === kind && s.id === id);
+  }
+  function selectSingle(kind, id) {
+    state.selection = { kind, id };
+    state.selections = [{ kind, id }];
+  }
+  function selectToggle(kind, id) {
+    const index = state.selections.findIndex((s) => s.kind === kind && s.id === id);
+    if (index >= 0) {
+      state.selections.splice(index, 1);
+      state.selection = state.selections.length ? state.selections.at(-1) : null;
+    } else {
+      state.selections.push({ kind, id });
+      state.selection = { kind, id };
+    }
+  }
+  function selectAdd(kind, id) {
+    if (!isSelected(kind, id)) state.selections.push({ kind, id });
+    state.selection = { kind, id };
+  }
+  function clearSelection() {
+    state.selection = null;
+    state.selections = [];
+  }
+
   function persistUiPreferences() {
     try {
       localStorage.setItem(UI_PREFERENCE_KEY, JSON.stringify(state.ui));
@@ -1424,9 +1451,9 @@ import {
     const clips = (track) => state.project.clips.filter((clip) => clip.trackId === track).map((clip) => {
       const asset = state.project.assets.find((item) => item.id === clip.assetId);
       const duration = clip.sourceEnd - clip.sourceStart;
-      return `<div class="timeline-clip ${track} ${state.selection?.kind === 'clip' && state.selection.id === clip.id ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
+      return `<div class="timeline-clip ${track} ${isSelected('clip', clip.id) ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
     }).join('');
-    const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${state.selection?.kind === 'text' && state.selection.id === text.id ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
+    const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${isSelected('text', text.id) ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
     document.getElementById('timelineContent').style.width = `${width + LABEL_WIDTH}px`;
     document.getElementById('timelineContent').innerHTML = `<div class="timeline-label-spacer">TIME</div><div class="timeline-ruler" style="margin-left:${LABEL_WIDTH}px;width:${width}px">${ruler}</div><div class="playhead" style="left:${LABEL_WIDTH + state.playhead * state.zoom}px"><i></i><span></span></div><div class="track-row"><div class="track-label"><b>V1</b><span>영상</span></div><div class="track-lane" style="width:${width}px">${clips('video')}</div></div><div class="track-row text-track"><div class="track-label"><b>T1</b><span>텍스트·자막</span></div><div class="track-lane" style="width:${width}px">${texts}</div></div><div class="track-row"><div class="track-label"><b>A1</b><span>오디오</span></div><div class="track-lane" style="width:${width}px">${clips('audio')}</div></div>`;
     document.getElementById('elementCount').textContent = `${state.project.clips.length + state.project.texts.length}개 요소`;
@@ -1563,43 +1590,44 @@ import {
   }
 
   function deleteSelection() {
-    if (!state.selection) return;
-    if (state.selection.kind === 'asset') { void removeAsset(state.selection.id); return; }
-    const selection = state.selection;
-    commit((project) => ({ ...project, clips: selection.kind === 'clip' ? project.clips.filter((clip) => clip.id !== selection.id) : project.clips, texts: selection.kind === 'text' ? project.texts.filter((text) => text.id !== selection.id) : project.texts }));
-    state.selection = null;
+    if (!state.selection && !state.selections.length) return;
+    if (state.selections.length <= 1 && state.selection?.kind === 'asset') { void removeAsset(state.selection.id); return; }
+    const clipIds = new Set(state.selections.filter((s) => s.kind === 'clip').map((s) => s.id));
+    const textIds = new Set(state.selections.filter((s) => s.kind === 'text').map((s) => s.id));
+    if (!clipIds.size && !textIds.size) return;
+    commit((project) => ({
+      ...project,
+      clips: project.clips.filter((clip) => !clipIds.has(clip.id)),
+      texts: project.texts.filter((text) => !textIds.has(text.id)),
+    }));
+    clearSelection();
   }
 
   function duplicateSelection() {
-    if (!state.selection) return;
-    const selection = state.selection;
-    if (selection.kind === 'clip') {
-      const original = state.project.clips.find((item) => item.id === selection.id);
-      if (!original) return;
-      const duration = original.sourceEnd - original.sourceStart;
-      const newId = uid();
-      commit((project) => {
-        const clip = project.clips.find((item) => item.id === original.id);
-        if (!clip) return project;
-        const newClip = { ...clone(clip), id: newId, timelineStart: clip.timelineStart + duration };
-        project.clips.push(newClip);
-        return project;
-      });
-      state.selection = { kind: 'clip', id: newId };
-    } else if (selection.kind === 'text') {
-      const original = state.project.texts.find((item) => item.id === selection.id);
-      if (!original) return;
-      const duration = original.end - original.start;
-      const newId = uid();
-      commit((project) => {
-        const text = project.texts.find((item) => item.id === original.id);
-        if (!text) return project;
-        const newText = { ...clone(text), id: newId, start: text.end, end: text.end + duration };
-        project.texts.push(newText);
-        return project;
-      });
-      state.selection = { kind: 'text', id: newId };
-    }
+    if (!state.selections.length) return;
+    const newSelections = [];
+    commit((project) => {
+      for (const sel of state.selections) {
+        if (sel.kind === 'clip') {
+          const clip = project.clips.find((item) => item.id === sel.id);
+          if (!clip) continue;
+          const duration = clip.sourceEnd - clip.sourceStart;
+          const newId = uid();
+          project.clips.push({ ...clone(clip), id: newId, timelineStart: clip.timelineStart + duration });
+          newSelections.push({ kind: 'clip', id: newId });
+        } else if (sel.kind === 'text') {
+          const text = project.texts.find((item) => item.id === sel.id);
+          if (!text) continue;
+          const duration = text.end - text.start;
+          const newId = uid();
+          project.texts.push({ ...clone(text), id: newId, start: text.end, end: text.end + duration });
+          newSelections.push({ kind: 'text', id: newId });
+        }
+      }
+      return project;
+    });
+    state.selections = newSelections;
+    state.selection = newSelections.at(-1) || null;
   }
 
   function parseSubtitleTime(value) {
@@ -2882,7 +2910,7 @@ import {
     document.getElementById('assetList').onclick=(event)=>{const add=event.target.closest('[data-add-asset]'),remove=event.target.closest('[data-remove-asset]'),select=event.target.closest('[data-select-asset]');if(add){event.stopPropagation();addAssetToTimeline(add.dataset.addAsset);}else if(remove){event.stopPropagation();void removeAsset(remove.dataset.removeAsset);}else if(select){state.selection={kind:'asset',id:select.dataset.selectAsset};renderAll();}};
     document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){state.selection={kind:'text',id:target.dataset.selectText};renderAll();}};
     const timeline=document.getElementById('timelineScroll');
-    timeline.onclick=(event)=>{const clip=event.target.closest('[data-select-clip]'),text=event.target.closest('[data-select-text]');if(clip){state.selection={kind:'clip',id:clip.dataset.selectClip};renderAll();return;}if(text){state.selection={kind:'text',id:text.dataset.selectText};renderAll();return;}const rect=timeline.getBoundingClientRect();seek((event.clientX-rect.left+timeline.scrollLeft-LABEL_WIDTH)/state.zoom);};
+    timeline.onclick=(event)=>{const clip=event.target.closest('[data-select-clip]'),text=event.target.closest('[data-select-text]');if(clip){const kind='clip',id=clip.dataset.selectClip;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}if(text){const kind='text',id=text.dataset.selectText;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}const rect=timeline.getBoundingClientRect();seek((event.clientX-rect.left+timeline.scrollLeft-LABEL_WIDTH)/state.zoom);};
     timeline.ondragstart=(event)=>{const clip=event.target.closest('[data-select-clip]');if(clip)state.draggedClip=clip.dataset.selectClip;};
     timeline.ondragover=(event)=>event.preventDefault();timeline.ondrop=(event)=>{const target=event.target.closest('[data-select-clip]');if(!target||!state.draggedClip)return;const sourceId=state.draggedClip,targetId=target.dataset.selectClip;commit((project)=>{const source=project.clips.find((c)=>c.id===sourceId),destination=project.clips.find((c)=>c.id===targetId);if(!source||!destination||source.trackId!==destination.trackId)return project;const ordered=project.clips.filter((c)=>c.trackId===source.trackId).sort((a,b)=>a.timelineStart-b.timelineStart);const from=ordered.findIndex((c)=>c.id===sourceId),to=ordered.findIndex((c)=>c.id===targetId);ordered.splice(to,0,ordered.splice(from,1)[0]);let cursor=0;ordered.forEach((c)=>{c.timelineStart=cursor;cursor+=c.sourceEnd-c.sourceStart;});return project;});state.draggedClip='';};
     timeline.onpointerdown=(event)=>{const handle=event.target.closest('[data-trim]');if(!handle)return;event.preventDefault();event.stopPropagation();const clip=state.project.clips.find((item)=>item.id===handle.dataset.clip);if(!clip)return;const startX=event.clientX,startSource=clip.sourceStart,endSource=clip.sourceEnd,startTimeline=clip.timelineStart;window.addEventListener('pointerup',(up)=>{const delta=(up.clientX-startX)/state.zoom;commit((project)=>{const current=project.clips.find((item)=>item.id===clip.id);if(!current)return project;if(handle.dataset.trim==='start'){const bounded=Math.max(-startSource,Math.min(endSource-startSource-.1,delta));current.sourceStart=startSource+bounded;current.timelineStart=startTimeline+bounded;}else current.sourceEnd=Math.max(startSource+.1,endSource+delta);return project;});},{once:true});};

@@ -52,7 +52,7 @@ export const emptyProject = () => ({
 // ─── State Factory ──────────────────────────────────────────────────────────
 export function createState() {
   return {
-    project: emptyProject(), selection: null, playhead: 0, playing: false, zoom: 18,
+    project: emptyProject(), selection: null, selections: [], playhead: 0, playing: false, zoom: 18,
     past: [], future: [], saveStatus: 'loading', exportOpen: false, settingsOpen: false, appMenuOpen: false,
     modalReturnFocus: null,
     ui: { ...defaultUiPreferences },
