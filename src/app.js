@@ -3297,6 +3297,7 @@ import {
     scheduleSave();
     renderToolbar();
     renderTimeline();
+    renderPreviewTexts();
     syncPreview();
     if (invalidatesShortform) renderInspector();
   }
