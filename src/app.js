@@ -2687,6 +2687,18 @@ import {
           };
         });
       });
+      // Snap adjacent clips to eliminate micro-gaps (floating point drift)
+      const tracks = ['video', 'audio'];
+      for (const trackId of tracks) {
+        const trackClips = project.clips.filter((c) => c.trackId === trackId).sort((a, b) => a.timelineStart - b.timelineStart);
+        for (let i = 1; i < trackClips.length; i++) {
+          const prevEnd = trackClips[i - 1].timelineStart + (trackClips[i - 1].sourceEnd - trackClips[i - 1].sourceStart);
+          const gap = trackClips[i].timelineStart - prevEnd;
+          if (gap > 0 && gap < 0.05) {
+            trackClips[i].timelineStart = prevEnd;
+          }
+        }
+      }
       project.texts = project.texts.flatMap((text) => {
         const kept = subtractTimeRanges(text.start, text.end, removals);
         if (!kept.length) return [];
