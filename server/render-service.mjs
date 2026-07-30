@@ -342,9 +342,11 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
   const filters = [`color=c=${ffmpegColor(project.canvas.background, '0x11151d@1')}:s=${width}x${height}:r=30:d=${duration.toFixed(3)},format=yuv420p[base0]`];
   let videoLabel = 'base0';
   let videoCount = 0;
-  for (const entry of [...inputClips].reverse()) {
+  // Process video clips in timeline order (not reverse) for seamless cuts
+  const videoEntries = inputClips.filter((entry) => entry.clip.trackId === 'video' && (entry.probe.hasVideo || entry.asset.kind === 'image'));
+  videoEntries.sort((a, b) => a.clip.timelineStart - b.clip.timelineStart);
+  for (const entry of videoEntries) {
     const { clip, asset, inputIndex, probe } = entry;
-    if (clip.trackId !== 'video' || (!probe.hasVideo && asset.kind !== 'image')) continue;
     const clipDuration = clip.sourceEnd - clip.sourceStart;
     const prepared = `visual${videoCount}`;
     const shifted = `visualShifted${videoCount}`;
@@ -359,8 +361,8 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
     filters.push(`[${inputIndex}:v]${trim},setpts=PTS-STARTPTS,${scale},${crop},fps=30,format=yuv420p[${prepared}]`);
     filters.push(`[${prepared}]setpts=PTS+${clip.timelineStart.toFixed(6)}/TB[${shifted}]`);
     const clipEnd = clip.timelineStart + clipDuration;
-    // Extend enable end by 1 frame (1/30s) to prevent gap at boundaries
-    filters.push(`[${videoLabel}][${shifted}]overlay=x=0:y=0:eof_action=pass:repeatlast=1:shortest=0:enable='between(t,${clip.timelineStart.toFixed(6)},${(clipEnd + 0.034).toFixed(6)})'[${nextBase}]`);
+    // Extend enable end by 2 frames (2/30s) to prevent gap at boundaries
+    filters.push(`[${videoLabel}][${shifted}]overlay=x=0:y=0:eof_action=pass:repeatlast=1:shortest=0:enable='gte(t,${clip.timelineStart.toFixed(6)})*lte(t,${(clipEnd + 0.067).toFixed(6)})'[${nextBase}]`);
     videoLabel = nextBase;
     videoCount += 1;
   }
