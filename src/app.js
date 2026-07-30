@@ -3030,9 +3030,17 @@
       if (event.target.closest('button, [role="menuitem"], [role="menuitemcheckbox"], a')) return;
       if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;
       if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}
+      else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'){event.preventDefault();redo();}
       else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}
-      else if(event.key.toLowerCase()==='s'){event.preventDefault();splitSelected();}
+      else if(event.key.toLowerCase()==='s'&&!(event.ctrlKey||event.metaKey)){event.preventDefault();splitSelected();}
       else if(event.code==='Space'){event.preventDefault();togglePlayback();}
+      else if(event.key==='ArrowLeft'){event.preventDefault();seek(state.playhead-(event.shiftKey?1:1/30));}
+      else if(event.key==='ArrowRight'){event.preventDefault();seek(state.playhead+(event.shiftKey?1:1/30));}
+      else if(event.key==='Home'){event.preventDefault();seek(0);}
+      else if(event.key==='End'){event.preventDefault();seek(state.project.duration);}
+      else if(event.key.toLowerCase()==='j'){event.preventDefault();if(state.playing)stopPlayback();seek(state.playhead-1/30);}
+      else if(event.key.toLowerCase()==='k'){event.preventDefault();togglePlayback();}
+      else if(event.key.toLowerCase()==='l'){event.preventDefault();if(state.playing)stopPlayback();seek(state.playhead+1/30);}
     });
   }
 
