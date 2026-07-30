@@ -201,8 +201,8 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .preview-text { position: absolute; box-sizing: border-box; padding: .18em .35em; transform: translate(-50%, -50%); line-height: 1.2; white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; cursor: pointer; text-shadow: 0 2px 7px rgba(0,0,0,.35); }
 .preview-text:hover { outline: 1px dashed var(--primary); }
 .range-with-input { display: flex; align-items: center; gap: 8px; }
-.range-with-input input[type="range"] { flex: 1; }
-.range-with-input input[type="number"] { width: 52px; height: 28px; padding: 0 5px; border: 1px solid var(--line); border-radius: 5px; background: #0a0f16; color: var(--text); font-size: var(--fs-sm); text-align: center; }
+.range-with-input input[type="range"] { flex: 1; min-width: 0; }
+.range-with-input input[type="number"] { flex: 0 0 52px; width: 52px !important; height: 28px; padding: 0 5px; border: 1px solid var(--line); border-radius: 5px; background: #0a0f16; color: var(--text); font-size: var(--fs-sm); text-align: center; }
 .playback-controls { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; border-top: 1px solid var(--line); background: #0d1219; }
 .playback-controls button { min-width: 34px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: #97a4b7; font-size: var(--fs-sm); }
 .playback-controls button:hover { background: #19222e; color: white; }
