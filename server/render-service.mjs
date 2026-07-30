@@ -335,10 +335,6 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
     const file = assetFiles.get(clip.assetId);
     if (!asset || !file) continue;
     if (asset.kind === 'image') inputArgs.push('-loop', '1', '-framerate', '30');
-    else if (asset.kind === 'video' || asset.kind === 'audio') {
-      // Fast seek to near clip start (keyframe-based), trim does precise cut
-      inputArgs.push('-ss', Math.max(0, clip.sourceStart - 0.5).toFixed(6));
-    }
     inputArgs.push('-i', file.path);
     inputClips.push({ clip, asset, inputIndex: inputClips.length, probe: probes.get(clip.assetId) || {} });
   }
@@ -346,15 +342,14 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
   const filters = [`color=c=${ffmpegColor(project.canvas.background, '0x11151d@1')}:s=${width}x${height}:r=30:d=${duration.toFixed(3)},format=yuv420p[base0]`];
   let videoLabel = 'base0';
   let videoCount = 0;
-  // Process video clips in timeline order (not reverse) for seamless cuts
+  // Process video clips in timeline order — use concat for seamless cuts
   const videoEntries = inputClips.filter((entry) => entry.clip.trackId === 'video' && (entry.probe.hasVideo || entry.asset.kind === 'image'));
   videoEntries.sort((a, b) => a.clip.timelineStart - b.clip.timelineStart);
+  const concatSegments = [];
   for (const entry of videoEntries) {
     const { clip, asset, inputIndex, probe } = entry;
     const clipDuration = clip.sourceEnd - clip.sourceStart;
     const prepared = `visual${videoCount}`;
-    const shifted = `visualShifted${videoCount}`;
-    const nextBase = `base${videoCount + 1}`;
     const trim = asset.kind === 'image'
       ? `loop=loop=-1:size=1:start=0,trim=duration=${clipDuration.toFixed(6)}`
       : `trim=start=${clip.sourceStart.toFixed(6)}:end=${clip.sourceEnd.toFixed(6)}`;
@@ -363,12 +358,31 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
     const scale = `scale=w='if(gt(a,${targetRatio.toFixed(9)}),-2,${width})':h='if(gt(a,${targetRatio.toFixed(9)}),${height},-2)'`;
     const crop = `crop=w=${width}:h=${height}:x='max(0,min(iw-ow,(${focusX})*iw-ow/2))':y='max(0,min(ih-oh,(${focusY})*ih-oh/2))'`;
     filters.push(`[${inputIndex}:v]${trim},setpts=PTS-STARTPTS,${scale},${crop},fps=30,format=yuv420p[${prepared}]`);
-    filters.push(`[${prepared}]setpts=PTS+${clip.timelineStart.toFixed(6)}/TB[${shifted}]`);
-    const clipEnd = clip.timelineStart + clipDuration;
-    // Extend enable end by 2 frames (2/30s) to prevent gap at boundaries
-    filters.push(`[${videoLabel}][${shifted}]overlay=x=0:y=0:eof_action=pass:repeatlast=1:shortest=0:enable='gte(t,${clip.timelineStart.toFixed(6)})*lte(t,${(clipEnd + 0.067).toFixed(6)})'[${nextBase}]`);
-    videoLabel = nextBase;
+    // Add gap filler if there's a gap before this clip
+    const expectedStart = concatSegments.length === 0 ? 0 : undefined;
+    if (concatSegments.length > 0) {
+      const prevEnd = videoEntries[videoCount - 1] ? videoEntries[videoCount - 1].clip.timelineStart + (videoEntries[videoCount - 1].clip.sourceEnd - videoEntries[videoCount - 1].clip.sourceStart) : 0;
+      const gap = clip.timelineStart - prevEnd;
+      if (gap > 0.02) {
+        const gapLabel = `gap${videoCount}`;
+        filters.push(`color=c=${ffmpegColor(project.canvas.background, '0x11151d@1')}:s=${width}x${height}:r=30:d=${gap.toFixed(6)},format=yuv420p[${gapLabel}]`);
+        concatSegments.push(gapLabel);
+      }
+    } else if (clip.timelineStart > 0.02) {
+      const gapLabel = `gap_start`;
+      filters.push(`color=c=${ffmpegColor(project.canvas.background, '0x11151d@1')}:s=${width}x${height}:r=30:d=${clip.timelineStart.toFixed(6)},format=yuv420p[${gapLabel}]`);
+      concatSegments.push(gapLabel);
+    }
+    concatSegments.push(prepared);
     videoCount += 1;
+  }
+  // Concat all video segments
+  if (concatSegments.length > 0) {
+    const concatInput = concatSegments.map((l) => `[${l}]`).join('');
+    filters.push(`${concatInput}concat=n=${concatSegments.length}:v=1:a=0[vconcat]`);
+    // Pad to full duration if needed
+    filters.push(`[base0][vconcat]overlay=x=0:y=0:eof_action=pass:repeatlast=1[base_final]`);
+    videoLabel = 'base_final';
   }
 
   let textCount = 0;
