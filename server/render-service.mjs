@@ -484,6 +484,8 @@ export function createRenderService({
       job.updatedAt = new Date().toISOString();
     }
     const plan = buildRenderPlan(project, jobAssets, probes, job.quality);
+    console.log('[render] Filter complex:', plan.filterComplex);
+    console.log('[render] Clips:', project.clips.filter(c => c.trackId === 'video').map(c => `${c.id.slice(0,6)} start=${c.timelineStart.toFixed(3)} src=${c.sourceStart.toFixed(3)}-${c.sourceEnd.toFixed(3)}`).join(' | '));
     if (job.status === 'cancelled') return;
     job.width = plan.width;
     job.height = plan.height;
