@@ -2981,9 +2981,12 @@ import {
       const frame = () => {
         if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
         const time = Math.min(state.project.duration, (performance.now() - started) / 1000);
-        context.fillStyle = state.project.canvas.background;
-        context.fillRect(0, 0, width, height);
         const clip = state.project.clips.find((item) => item.trackId === 'video' && time >= item.timelineStart && time <= item.timelineStart + clipDuration(item));
+        // Only clear canvas if no video clip at this time (preserve previous frame during seek)
+        if (!clip) {
+          context.fillStyle = state.project.canvas.background;
+          context.fillRect(0, 0, width, height);
+        }
         for (const [id, element] of elements) {
           if (element instanceof HTMLVideoElement && id !== clip?.assetId) element.pause();
         }
@@ -2993,13 +2996,14 @@ import {
           const element = elements.get(clip.assetId);
           if (element instanceof HTMLVideoElement) {
             const expected = clipSourceTime(clip, time);
-            // Same asset playing continuously — don't seek unless drift is large
+            // Skip seek if video is naturally playing close to expected time
+            // (happens with same-asset clips from silence removal)
             const drift = Math.abs(element.currentTime - expected);
-            if (drift > 0.08) element.currentTime = expected;
+            if (drift > 0.25 && element.readyState >= 1) element.currentTime = expected;
             element.volume = clipVolume(clip, time);
             if (element.paused) void element.play();
             activeId = clip.id;
-            // Always draw — use whatever frame the video has
+            // Always draw current frame
             const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
               if (trans && trans.type.startsWith('wipe')) {
                 const wipeX = trans.type === 'wipe-left' ? width * trans.progress : width * (1 - trans.progress);
