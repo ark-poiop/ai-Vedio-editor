@@ -404,6 +404,29 @@ import {
     });
   }
 
+  /** Generate waveform peaks (128 samples) from audio file for timeline visualization */
+  async function generateWaveform(file) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+    try {
+      const ctx = new AudioContextClass();
+      const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
+      const channel = buffer.getChannelData(0);
+      const peaks = 128;
+      const blockSize = Math.floor(channel.length / peaks);
+      const waveform = new Array(peaks);
+      for (let i = 0; i < peaks; i++) {
+        let sum = 0;
+        const start = i * blockSize;
+        const end = Math.min(start + blockSize, channel.length);
+        for (let j = start; j < end; j++) sum += Math.abs(channel[j]);
+        waveform[i] = Math.min(1, sum / (end - start) * 2.5);
+      }
+      await ctx.close();
+      return waveform;
+    } catch { return null; }
+  }
+
   async function inspectFile(file, id) {
     const url = URL.createObjectURL(file);
     const kind = file.type.startsWith('audio/') ? 'audio' : file.type.startsWith('image/') ? 'image' : 'video';
@@ -1493,7 +1516,7 @@ import {
     root.innerHTML = `
       <section class="property-section">${accHead('canvas', '<h3>캔버스</h3>')}<div class="accordion-body"${accBody('canvas')}><label class="field"><span>화면 비율</span><select data-field="canvas-ratio"><option value="9:16" ${state.project.canvas.ratio === '9:16' ? 'selected' : ''}>9:16 · Shorts</option><option value="1:1" ${state.project.canvas.ratio === '1:1' ? 'selected' : ''}>1:1 · Square</option><option value="16:9" ${state.project.canvas.ratio === '16:9' ? 'selected' : ''}>16:9 · Landscape</option></select></label><div class="ratio-meta"><span>${state.project.canvas.width} × ${state.project.canvas.height}</span><em>30 FPS</em></div></div></section>
       ${clip ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div>`)}<div class="accordion-body"${accBody('selection')}><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label><label class="field"><span>속도 <b>${(clip.speed || 1).toFixed(2)}x</b></span><input data-field="clip-speed" type="range" min="0.25" max="4" step="0.05" value="${clip.speed || 1}"></label><div class="field-grid"><label class="field"><span>페이드 인</span><input data-field="clip-fadeIn" type="number" min="0" max="5" step="0.1" value="${(clip.fadeIn || 0).toFixed(1)}"></label><label class="field"><span>페이드 아웃</span><input data-field="clip-fadeOut" type="number" min="0" max="5" step="0.1" value="${(clip.fadeOut || 0).toFixed(1)}"></label></div><div class="field-grid"><label class="field"><span>전환 효과</span><select data-field="clip-transition-type">${TRANSITION_TYPES.map((t) => `<option value="${t}" ${(clip.transition?.type || 'none') === t ? 'selected' : ''}>${TRANSITION_LABELS[t]}</option>`).join('')}</select></label><label class="field"><span>전환 길이</span><input data-field="clip-transition-duration" type="number" min="0" max="3" step="0.1" value="${(clip.transition?.duration || 0.5).toFixed(1)}"></label></div></div></section>` : ''}
-      ${text ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div>`)}<div class="accordion-body"${accBody('selection')}><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><label class="field"><span>글꼴</span><select data-field="text-fontFamily">${['sans-serif','serif','monospace','Noto Sans KR','Pretendard','Inter'].map((f) => `<option value="${f}" ${(text.fontFamily || 'sans-serif') === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div><label class="field"><span>투명도 <b>${Math.round((text.opacity ?? 1) * 100)}%</b></span><input data-field="text-opacity" type="range" min="0" max="1" step="0.05" value="${text.opacity ?? 1}"></label><div class="field keyframe-info"><span>키프레임 ${(text.keyframes || []).length}개</span><button type="button" id="addTextKeyframe" class="small-action">현재 위치 추가</button></div></div></section>` : ''}
+      ${text ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div>`)}<div class="accordion-body"${accBody('selection')}><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="12" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><label class="field"><span>글꼴</span><select data-field="text-fontFamily">${['sans-serif','serif','monospace','Noto Sans KR','Pretendard','Inter'].map((f) => `<option value="${f}" ${(text.fontFamily || 'sans-serif') === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div><label class="field"><span>투명도 <b>${Math.round((text.opacity ?? 1) * 100)}%</b></span><input data-field="text-opacity" type="range" min="0" max="1" step="0.05" value="${text.opacity ?? 1}"></label><div class="field keyframe-info"><span>키프레임 ${(text.keyframes || []).length}개</span><button type="button" id="addTextKeyframe" class="small-action">현재 위치 추가</button></div></div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section">${accHead('captions', '<div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div>')}<div class="accordion-body"${accBody('captions')}><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</div></section>
       <section class="property-section ai-section">${accHead('stt', `<div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div>`)}<div class="accordion-body"${accBody('stt')}><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</div></section>
@@ -1510,7 +1533,8 @@ import {
     const clips = (track) => state.project.clips.filter((clip) => clip.trackId === track).map((clip) => {
       const asset = state.project.assets.find((item) => item.id === clip.assetId);
       const duration = clipDuration(clip);
-      return `<div class="timeline-clip ${track} ${isSelected('clip', clip.id) ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
+      const waveformSvg = asset?.waveform && track === 'audio' ? `<svg class="clip-waveform" viewBox="0 0 128 32" preserveAspectRatio="none">${asset.waveform.map((v, i) => `<rect x="${i}" y="${16 - v * 15}" width="1" height="${v * 30 || 0.5}"/>`).join('')}</svg>` : '';
+      return `<div class="timeline-clip ${track} ${isSelected('clip', clip.id) ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}${waveformSvg}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
     }).join('');
     const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${isSelected('text', text.id) ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
     document.getElementById('timelineContent').style.width = `${width + LABEL_WIDTH}px`;
@@ -1591,6 +1615,9 @@ import {
       if (!['video/', 'audio/', 'image/'].some((prefix) => file.type.startsWith(prefix))) continue;
       try {
         const id = uid(); const asset = await inspectFile(file, id); await saveBlob(id, file);
+        if (asset.kind === 'audio' || asset.kind === 'video') {
+          asset.waveform = await generateWaveform(file);
+        }
         commit((project) => {
           const trackId = asset.kind === 'audio' ? 'audio' : 'video';
           const start = project.clips.filter((clip) => clip.trackId === trackId).reduce((end, clip) => Math.max(end, clip.timelineStart + clip.sourceEnd - clip.sourceStart), 0);
@@ -2326,15 +2353,21 @@ import {
     return new Promise((resolve, reject) => {
       let workerUrl;
       try {
-        // Resolve worker URL relative to current module or use inline
-        const scriptBase = document.currentScript?.src || import.meta.url || '';
+        // Resolve worker URL relative to current module
+        const scriptBase = import.meta.url || '';
         const base = scriptBase.substring(0, scriptBase.lastIndexOf('/') + 1);
-        workerUrl = base + 'silence-worker.js';
+        workerUrl = new URL('silence-worker.js', base).href;
       } catch {
         reject(new Error('Worker URL resolution failed'));
         return;
       }
-      const worker = new Worker(workerUrl);
+      let worker;
+      try {
+        worker = new Worker(workerUrl);
+      } catch {
+        reject(new Error('Worker creation failed'));
+        return;
+      }
       const checkCancellation = setInterval(() => {
         if (isCancelled()) {
           clearInterval(checkCancellation);
@@ -2470,7 +2503,12 @@ import {
       const blob = await loadBlob(asset.id);
       if (isCancelled()) return;
       if (!blob) throw new Error('원본 미디어를 로컬 저장소에서 찾을 수 없습니다.');
-      const audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
+      let audioBuffer;
+      try {
+        audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
+      } catch (decodeError) {
+        throw new Error(`오디오 디코딩 실패: 이 미디어 형식은 브라우저에서 직접 분석할 수 없습니다. (${decodeError?.message || '지원하지 않는 코덱'})`);
+      }
       if (isCancelled()) return;
       renderSilenceState({ status: 'analyzing', progress: 0.12, message: 'RMS 음량을 분석하고 있습니다.' });
       const candidates = await detectSilenceCandidates(audioBuffer, options, (progress) => {
