@@ -2993,15 +2993,12 @@ import {
           const element = elements.get(clip.assetId);
           if (element instanceof HTMLVideoElement) {
             const expected = clipSourceTime(clip, time);
-            // Only seek if clip changed AND source time drifted significantly
-            if (activeId !== clip.id) {
-              element.currentTime = expected;
-              activeId = clip.id;
-            } else if (Math.abs(element.currentTime - expected) > 0.15) {
-              element.currentTime = expected;
-            }
+            // Same asset playing continuously — don't seek unless drift is large
+            const drift = Math.abs(element.currentTime - expected);
+            if (drift > 0.08) element.currentTime = expected;
             element.volume = clipVolume(clip, time);
             if (element.paused) void element.play();
+            activeId = clip.id;
             // Always draw — use whatever frame the video has
             const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
               if (trans && trans.type.startsWith('wipe')) {
