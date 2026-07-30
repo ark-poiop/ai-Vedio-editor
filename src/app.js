@@ -2993,12 +2993,17 @@ import {
           const element = elements.get(clip.assetId);
           if (element instanceof HTMLVideoElement) {
             const expected = clipSourceTime(clip, time);
-            if (activeId !== clip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
+            // Only seek if clip changed AND source time drifted significantly
+            if (activeId !== clip.id) {
+              element.currentTime = expected;
+              activeId = clip.id;
+            } else if (Math.abs(element.currentTime - expected) > 0.15) {
+              element.currentTime = expected;
+            }
             element.volume = clipVolume(clip, time);
             if (element.paused) void element.play();
-            // Always draw if we have any frame (readyState >= 1), not just >= 2
-            if (element.readyState >= 1) {
-              const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
+            // Always draw — use whatever frame the video has
+            const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
               if (trans && trans.type.startsWith('wipe')) {
                 const wipeX = trans.type === 'wipe-left' ? width * trans.progress : width * (1 - trans.progress);
                 context.save(); context.beginPath(); context.rect(trans.type === 'wipe-left' ? 0 : wipeX, 0, trans.type === 'wipe-left' ? wipeX : width - wipeX, height); context.clip();
@@ -3007,8 +3012,6 @@ import {
               } else {
                 drawCover(context, element, element.videoWidth, element.videoHeight, width, height, focus);
               }
-            }
-            activeId = clip.id;
           } else if (element) drawCover(context, element, element.naturalWidth, element.naturalHeight, width, height);
           context.globalAlpha = 1;
         }
