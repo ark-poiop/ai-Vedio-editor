@@ -43,6 +43,19 @@ import {
   /** Source time at given timeline time for a clip accounting for speed */
   function clipSourceTime(clip, timelineTime) { return clip.sourceStart + (timelineTime - clip.timelineStart) * (clip.speed || 1); }
 
+  /** Effective volume at a given timeline time with fade in/out */
+  function clipVolume(clip, time) {
+    const dur = clipDuration(clip);
+    const elapsed = time - clip.timelineStart;
+    const remaining = dur - elapsed;
+    let vol = clip.volume;
+    const fadeIn = clip.fadeIn || 0;
+    const fadeOut = clip.fadeOut || 0;
+    if (fadeIn > 0 && elapsed < fadeIn) vol *= elapsed / fadeIn;
+    if (fadeOut > 0 && remaining < fadeOut) vol *= remaining / fadeOut;
+    return clamp(vol, 0, 1);
+  }
+
   /** Interpolate text keyframe properties at a given time (0-1 progress within text duration) */
   function interpolateTextKeyframes(text, time) {
     const progress = (time - text.start) / Math.max(0.01, text.end - text.start);
@@ -679,7 +692,7 @@ import {
       } else {
         const video = document.createElement('video');
         video.className = 'preview-media'; video.src = asset.url; video.playsInline = true; video.preload = 'auto';
-        video.volume = clip.volume; video.playbackRate = clip.speed || 1; video.currentTime = Math.max(0, clipSourceTime(clip, state.playhead));
+        video.volume = clipVolume(clip, state.playhead); video.playbackRate = clip.speed || 1; video.currentTime = Math.max(0, clipSourceTime(clip, state.playhead));
         host.append(video); state.previewVisual = video;
         if (state.playing) void video.play().catch(() => { state.playing = false; renderPlayback(); });
       }
@@ -1466,7 +1479,7 @@ import {
     const accBody = (key) => acc[key] ? '' : ' hidden';
     root.innerHTML = `
       <section class="property-section">${accHead('canvas', '<h3>캔버스</h3>')}<div class="accordion-body"${accBody('canvas')}><label class="field"><span>화면 비율</span><select data-field="canvas-ratio"><option value="9:16" ${state.project.canvas.ratio === '9:16' ? 'selected' : ''}>9:16 · Shorts</option><option value="1:1" ${state.project.canvas.ratio === '1:1' ? 'selected' : ''}>1:1 · Square</option><option value="16:9" ${state.project.canvas.ratio === '16:9' ? 'selected' : ''}>16:9 · Landscape</option></select></label><div class="ratio-meta"><span>${state.project.canvas.width} × ${state.project.canvas.height}</span><em>30 FPS</em></div></div></section>
-      ${clip ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div>`)}<div class="accordion-body"${accBody('selection')}><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label><label class="field"><span>속도 <b>${(clip.speed || 1).toFixed(2)}x</b></span><input data-field="clip-speed" type="range" min="0.25" max="4" step="0.05" value="${clip.speed || 1}"></label></div></section>` : ''}
+      ${clip ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div>`)}<div class="accordion-body"${accBody('selection')}><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label><label class="field"><span>속도 <b>${(clip.speed || 1).toFixed(2)}x</b></span><input data-field="clip-speed" type="range" min="0.25" max="4" step="0.05" value="${clip.speed || 1}"></label><div class="field-grid"><label class="field"><span>페이드 인</span><input data-field="clip-fadeIn" type="number" min="0" max="5" step="0.1" value="${(clip.fadeIn || 0).toFixed(1)}"></label><label class="field"><span>페이드 아웃</span><input data-field="clip-fadeOut" type="number" min="0" max="5" step="0.1" value="${(clip.fadeOut || 0).toFixed(1)}"></label></div></div></section>` : ''}
       ${text ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div>`)}<div class="accordion-body"${accBody('selection')}><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><label class="field"><span>글꼴</span><select data-field="text-fontFamily">${['sans-serif','serif','monospace','Noto Sans KR','Pretendard','Inter'].map((f) => `<option value="${f}" ${(text.fontFamily || 'sans-serif') === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div><label class="field"><span>투명도 <b>${Math.round((text.opacity ?? 1) * 100)}%</b></span><input data-field="text-opacity" type="range" min="0" max="1" step="0.05" value="${text.opacity ?? 1}"></label><div class="field keyframe-info"><span>키프레임 ${(text.keyframes || []).length}개</span><button type="button" id="addTextKeyframe" class="small-action">현재 위치 추가</button></div></div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section">${accHead('captions', '<div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div>')}<div class="accordion-body"${accBody('captions')}><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</div></section>
@@ -2880,7 +2893,7 @@ import {
           if (element instanceof HTMLVideoElement) {
             const expected = clipSourceTime(clip, time);
             if (activeId !== clip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
-            element.volume = clip.volume;
+            element.volume = clipVolume(clip, time);
             if (element.paused) void element.play();
             if (element.readyState >= 2) {
               const focus = clip.reframe?.enabled ? focusAtSourceTime(clip.reframe, expected) : { x: 0.5, y: 0.5 };
@@ -2901,7 +2914,7 @@ import {
           if (element) {
             const expected = clipSourceTime(audioClip, time);
             if (activeAudioId !== audioClip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
-            element.volume = audioClip.volume;
+            element.volume = clipVolume(audioClip, time);
             if (element.paused) void element.play();
             activeAudioId = audioClip.id;
           }
@@ -3176,6 +3189,8 @@ import {
       clip.sourceEnd = Math.max(clip.sourceStart + .1, clip.sourceEnd);
       clip.volume = clamp(clip.volume, 0, 1);
       clip.speed = clamp(clip.speed || 1, 0.25, 4);
+      clip.fadeIn = clamp(clip.fadeIn || 0, 0, 5);
+      clip.fadeOut = clamp(clip.fadeOut || 0, 0, 5);
     } else if (selection.kind === 'text') {
       const text = project.texts.find((item) => item.id === selection.id);
       if (!text) return;
