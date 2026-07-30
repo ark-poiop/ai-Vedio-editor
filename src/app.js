@@ -43,6 +43,31 @@ import {
   /** Source time at given timeline time for a clip accounting for speed */
   function clipSourceTime(clip, timelineTime) { return clip.sourceStart + (timelineTime - clip.timelineStart) * (clip.speed || 1); }
 
+  /** Interpolate text keyframe properties at a given time (0-1 progress within text duration) */
+  function interpolateTextKeyframes(text, time) {
+    const progress = (time - text.start) / Math.max(0.01, text.end - text.start);
+    const keyframes = text.keyframes;
+    if (!keyframes || !keyframes.length) return { x: text.x, y: text.y, fontSize: text.fontSize, opacity: text.opacity ?? 1 };
+    // Find surrounding keyframes
+    let before = null, after = null;
+    for (const kf of keyframes) {
+      if (kf.t <= progress) before = kf;
+      if (kf.t >= progress && !after) after = kf;
+    }
+    if (!before && !after) return { x: text.x, y: text.y, fontSize: text.fontSize, opacity: text.opacity ?? 1 };
+    if (!before) before = after;
+    if (!after) after = before;
+    if (before === after) return { x: before.x ?? text.x, y: before.y ?? text.y, fontSize: before.fontSize ?? text.fontSize, opacity: before.opacity ?? text.opacity ?? 1 };
+    const range = after.t - before.t;
+    const t = range > 0 ? (progress - before.t) / range : 0;
+    return {
+      x: (before.x ?? text.x) + ((after.x ?? text.x) - (before.x ?? text.x)) * t,
+      y: (before.y ?? text.y) + ((after.y ?? text.y) - (before.y ?? text.y)) * t,
+      fontSize: (before.fontSize ?? text.fontSize) + ((after.fontSize ?? text.fontSize) - (before.fontSize ?? text.fontSize)) * t,
+      opacity: (before.opacity ?? 1) + ((after.opacity ?? 1) - (before.opacity ?? 1)) * t,
+    };
+  }
+
   function persistUiPreferences() {
     try {
       localStorage.setItem(UI_PREFERENCE_KEY, JSON.stringify(state.ui));
@@ -682,7 +707,10 @@ import {
   function renderPreviewTexts() {
     document.getElementById('textLayer').innerHTML = state.project.texts
       .filter((text) => state.playhead >= text.start && state.playhead <= text.end)
-      .map((text) => `<div class="preview-text" data-select-text="${text.id}" style="left:${text.x}%;top:${text.y}%;color:${text.color};background:${text.background};font-size:${Math.max(12, text.fontSize / 3.2)}px;font-weight:${text.fontWeight};text-align:${text.align}">${escapeHtml(text.text).replaceAll('\n', '<br>')}</div>`).join('');
+      .map((text) => {
+        const kf = (text.keyframes && text.keyframes.length) ? interpolateTextKeyframes(text, state.playhead) : { x: text.x, y: text.y, fontSize: text.fontSize, opacity: text.opacity ?? 1 };
+        return `<div class="preview-text" data-select-text="${text.id}" style="left:${kf.x}%;top:${kf.y}%;color:${text.color};background:${text.background};font-size:${Math.max(12, kf.fontSize / 3.2)}px;font-weight:${text.fontWeight};font-family:${text.fontFamily || 'sans-serif'};text-align:${text.align};opacity:${kf.opacity}">${escapeHtml(text.text).replaceAll('\n', '<br>')}</div>`;
+      }).join('');
   }
 
   function renderPlayback() {
@@ -1439,7 +1467,7 @@ import {
     root.innerHTML = `
       <section class="property-section">${accHead('canvas', '<h3>캔버스</h3>')}<div class="accordion-body"${accBody('canvas')}><label class="field"><span>화면 비율</span><select data-field="canvas-ratio"><option value="9:16" ${state.project.canvas.ratio === '9:16' ? 'selected' : ''}>9:16 · Shorts</option><option value="1:1" ${state.project.canvas.ratio === '1:1' ? 'selected' : ''}>1:1 · Square</option><option value="16:9" ${state.project.canvas.ratio === '16:9' ? 'selected' : ''}>16:9 · Landscape</option></select></label><div class="ratio-meta"><span>${state.project.canvas.width} × ${state.project.canvas.height}</span><em>30 FPS</em></div></div></section>
       ${clip ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div>`)}<div class="accordion-body"${accBody('selection')}><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label><label class="field"><span>속도 <b>${(clip.speed || 1).toFixed(2)}x</b></span><input data-field="clip-speed" type="range" min="0.25" max="4" step="0.05" value="${clip.speed || 1}"></label></div></section>` : ''}
-      ${text ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div>`)}<div class="accordion-body"${accBody('selection')}><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><label class="field"><span>글꼴</span><select data-field="text-fontFamily">${['sans-serif','serif','monospace','Noto Sans KR','Pretendard','Inter'].map((f) => `<option value="${f}" ${(text.fontFamily || 'sans-serif') === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></div></section>` : ''}
+      ${text ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div>`)}<div class="accordion-body"${accBody('selection')}><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><label class="field"><span>글꼴</span><select data-field="text-fontFamily">${['sans-serif','serif','monospace','Noto Sans KR','Pretendard','Inter'].map((f) => `<option value="${f}" ${(text.fontFamily || 'sans-serif') === f ? 'selected' : ''}>${f}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div><label class="field"><span>투명도 <b>${Math.round((text.opacity ?? 1) * 100)}%</b></span><input data-field="text-opacity" type="range" min="0" max="1" step="0.05" value="${text.opacity ?? 1}"></label><div class="field keyframe-info"><span>키프레임 ${(text.keyframes || []).length}개</span><button type="button" id="addTextKeyframe" class="small-action">현재 위치 추가</button></div></div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section">${accHead('captions', '<div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div>')}<div class="accordion-body"${accBody('captions')}><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</div></section>
       <section class="property-section ai-section">${accHead('stt', `<div class="ai-title"><span>✦</span><div><h3>AI 자동 자막</h3><small>${sttAsset ? escapeHtml(sttAsset.name) : '영상 또는 오디오 필요'}</small></div></div>`)}<div class="accordion-body"${accBody('stt')}><button id="autoCaptionButton" ${!sttAsset || state.sttJob.active || sttProposal || sttRequiresServer || state.shortform.analyzing || state.shortform.candidates.length ? 'disabled' : ''}>자동 자막 생성 <span>${sttStatusLabel}</span></button>${sttRequiresServer ? '<p class="ai-notice">자동 자막 API는 <code>npm run dev</code> 실행 시 사용할 수 있습니다. 단일 HTML에서는 SRT/VTT 가져오기를 이용하세요.</p>' : ''}${state.sttJob.active ? `<div class="stt-status"><div><span>${escapeHtml(state.sttJob.message)}</span><b>${Math.round(state.sttJob.progress * 100)}%</b></div><progress value="${state.sttJob.progress}" max="1"></progress><button id="cancelSttButton" class="danger-action">작업 취소</button></div>` : state.sttJob.message ? `<p class="stt-message ${state.sttJob.status === 'failed' ? 'error' : ''}">${escapeHtml(state.sttJob.message)}</p>` : ''}${sttProposal ? `<div class="stt-proposal"><div class="proposal-head"><strong>자막 제안 ${sttProposal.segments.length}개</strong><span>${escapeHtml(sttProposal.provider)}${sttProposal.demo ? ' · DEMO' : ''}</span></div><div class="proposal-list">${sttProposal.segments.slice(0, 4).map((segment) => `<div><time>${formatTime(segment.start)}–${formatTime(segment.end)}</time><p>${escapeHtml(segment.text)}</p>${Number.isFinite(segment.confidence) ? `<em>${Math.round(segment.confidence * 100)}%</em>` : ''}</div>`).join('')}</div><div class="proposal-actions"><button id="dismissSttButton">취소</button><button id="applySttButton" class="apply">타임라인에 적용</button></div></div>` : ''}</div></section>
@@ -1633,6 +1661,24 @@ import {
     });
     state.selections = newSelections;
     state.selection = newSelections.at(-1) || null;
+  }
+
+  function addTextKeyframe() {
+    if (state.selection?.kind !== 'text') return;
+    const textId = state.selection.id;
+    const text = state.project.texts.find((item) => item.id === textId);
+    if (!text || state.playhead < text.start || state.playhead > text.end) return;
+    const progress = (state.playhead - text.start) / Math.max(0.01, text.end - text.start);
+    commit((project) => {
+      const t = project.texts.find((item) => item.id === textId);
+      if (!t) return project;
+      if (!t.keyframes) t.keyframes = [];
+      // Remove existing keyframe at same time (±0.01)
+      t.keyframes = t.keyframes.filter((kf) => Math.abs(kf.t - progress) > 0.01);
+      t.keyframes.push({ t: Number(progress.toFixed(3)), x: t.x, y: t.y, fontSize: t.fontSize, opacity: t.opacity ?? 1 });
+      t.keyframes.sort((a, b) => a.t - b.t);
+      return project;
+    });
   }
 
   function parseSubtitleTime(value) {
@@ -2583,7 +2629,7 @@ import {
 
   function addText() {
     const id = uid();
-    commit((project) => { project.texts.push({ id, role: 'text', text: '텍스트를 입력하세요', start: state.playhead, end: Math.min(project.duration, state.playhead + 4), x: 50, y: 76, fontSize: 56, fontWeight: 800, fontFamily: 'sans-serif', color: '#ffffff', background: '#00000099', align: 'center' }); return project; });
+    commit((project) => { project.texts.push({ id, role: 'text', text: '텍스트를 입력하세요', start: state.playhead, end: Math.min(project.duration, state.playhead + 4), x: 50, y: 76, fontSize: 56, fontWeight: 800, fontFamily: 'sans-serif', opacity: 1, color: '#ffffff', background: '#00000099', align: 'center', keyframes: [] }); return project; });
     state.selection = { kind: 'text', id }; renderAll();
   }
 
@@ -2750,12 +2796,16 @@ import {
     context.drawImage(source, sourceX, sourceY, cropWidth, cropHeight, 0, 0, width, height);
   }
 
-  function drawText(context, text, scale, width, height) {
-    const x = width*text.x/100, y = height*text.y/100, size = Math.round(text.fontSize*scale);
+  function drawText(context, text, scale, width, height, time) {
+    const kf = (text.keyframes && text.keyframes.length && time !== undefined) ? interpolateTextKeyframes(text, time) : { x: text.x, y: text.y, fontSize: text.fontSize, opacity: text.opacity ?? 1 };
+    const x = width*kf.x/100, y = height*kf.y/100, size = Math.round(kf.fontSize*scale);
+    const opacity = clamp(kf.opacity, 0, 1);
+    context.globalAlpha = opacity;
     context.font = `${text.fontWeight} ${size}px ${text.fontFamily || 'sans-serif'}`; context.textAlign = text.align; context.textBaseline = 'middle';
     const metrics = context.measureText(text.text); const padding = size*.22;
     let left = x-metrics.width/2; if (text.align === 'left') left=x; if (text.align === 'right') left=x-metrics.width;
     context.fillStyle=text.background; context.fillRect(left-padding,y-size*.7,metrics.width+padding*2,size*1.4); context.fillStyle=text.color; context.fillText(text.text,x,y);
+    context.globalAlpha = 1;
   }
 
   async function exportVideo(quality, signal) {
@@ -2858,7 +2908,7 @@ import {
         }
 
         state.project.texts.filter((text) => time >= text.start && time <= text.end)
-          .forEach((text) => drawText(context, text, width / state.project.canvas.width, width, height));
+          .forEach((text) => drawText(context, text, width / state.project.canvas.width, width, height, time));
         updateExport(time / state.project.duration, `렌더링 ${Math.round(time / state.project.duration * 100)}%`);
         if (time >= state.project.duration) { signal?.removeEventListener('abort', onAbort); resolve(); } else requestAnimationFrame(frame);
       };
@@ -2955,6 +3005,7 @@ import {
       else if (target.dataset.previewReframe !== undefined) previewReframeKeyframe(Number(target.dataset.previewReframe));
       else if (target.dataset.previewSilence !== undefined) previewSilenceCandidate(Number(target.dataset.previewSilence), Number(target.dataset.previewOccurrence || 0));
       else if (target.id === 'jsonExport') downloadJson();
+      else if (target.id === 'addTextKeyframe') addTextKeyframe();
       else if (target.id === 'importCaptionsButton') document.getElementById('captionInput').click();
       else if (target.id === 'exportCaptionsButton') exportCaptions();
       else if (target.id === 'autoCaptionButton') void startAutoCaption();
