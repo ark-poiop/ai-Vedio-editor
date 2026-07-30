@@ -16,6 +16,7 @@ await writeFile(resolve(dist, 'index.html'), html
   .replace('./src/app.js', './app.js'));
 await cp(resolve(root, 'src/styles.css'), resolve(dist, 'styles.css'));
 await cp(resolve(root, 'src/state.js'), resolve(dist, 'state.js'));
+await cp(resolve(root, 'src/silence-worker.js'), resolve(dist, 'silence-worker.js'));
 await writeFile(resolve(dist, 'app.js'), app.replace("'./state.js'", "'./state.js'"));
 
 // Standalone HTML: inline state.js into app.js as a single script

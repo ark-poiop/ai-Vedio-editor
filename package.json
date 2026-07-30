@@ -7,6 +7,6 @@
     "dev": "node scripts/serve.mjs",
     "build": "node scripts/build.mjs",
     "test": "node --test 'tests/**/*.test.mjs'",
-    "check": "node --check src/state.js && node --check src/app.js && node --check server/assemblyai-provider.mjs && node --check server/stt-service.mjs && node --check server/llm-service.mjs && node --check server/render-service.mjs && node --check server/app-server.mjs && node --check scripts/serve.mjs"
+    "check": "node --check src/state.js && node --check src/silence-worker.js && node --check src/app.js && node --check server/assemblyai-provider.mjs && node --check server/stt-service.mjs && node --check server/llm-service.mjs && node --check server/render-service.mjs && node --check server/app-server.mjs && node --check scripts/serve.mjs"
   }
 }

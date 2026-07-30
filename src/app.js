@@ -964,7 +964,7 @@ import {
         const signature = frameColorSignature(context, canvas.width, canvas.height);
         samples.push({ time: times[index], difference: signatureDifference(previousSignature, signature) });
         previousSignature = signature;
-        if (index % 8 === 0 || index === times.length - 1) {
+        if (index % 4 === 0 || index === times.length - 1) {
           state.shortform.progress = 0.08 + ((index + 1) / times.length) * 0.72;
           state.shortform.message = `장면 변화 ${index + 1}/${times.length} 프레임 분석 중`;
           renderInspector();
@@ -2173,6 +2173,76 @@ import {
   }
 
   async function detectSilenceCandidates(audioBuffer, options, onProgress, isCancelled) {
+    // Try Web Worker for off-main-thread analysis
+    if (typeof Worker !== 'undefined') {
+      try {
+        return await detectSilenceInWorker(audioBuffer, options, onProgress, isCancelled);
+      } catch (workerError) {
+        // Fallback to main thread if Worker fails (e.g., file:// protocol)
+        if (workerError?.name === 'AbortError') throw workerError;
+      }
+    }
+    return detectSilenceMainThread(audioBuffer, options, onProgress, isCancelled);
+  }
+
+  function detectSilenceInWorker(audioBuffer, options, onProgress, isCancelled) {
+    return new Promise((resolve, reject) => {
+      let workerUrl;
+      try {
+        // Resolve worker URL relative to current module or use inline
+        const scriptBase = document.currentScript?.src || import.meta.url || '';
+        const base = scriptBase.substring(0, scriptBase.lastIndexOf('/') + 1);
+        workerUrl = base + 'silence-worker.js';
+      } catch {
+        reject(new Error('Worker URL resolution failed'));
+        return;
+      }
+      const worker = new Worker(workerUrl);
+      const checkCancellation = setInterval(() => {
+        if (isCancelled()) {
+          clearInterval(checkCancellation);
+          worker.terminate();
+          const error = new Error('침묵 분석이 취소되었습니다.');
+          error.name = 'AbortError';
+          reject(error);
+        }
+      }, 200);
+      worker.onmessage = (event) => {
+        const { type } = event.data;
+        if (type === 'progress') {
+          onProgress(event.data.progress);
+        } else if (type === 'result') {
+          clearInterval(checkCancellation);
+          worker.terminate();
+          resolve(event.data.candidates);
+        } else if (type === 'error') {
+          clearInterval(checkCancellation);
+          worker.terminate();
+          reject(new Error(event.data.message));
+        }
+      };
+      worker.onerror = (event) => {
+        clearInterval(checkCancellation);
+        worker.terminate();
+        reject(new Error(event.message || 'Worker 실행 오류'));
+      };
+      // Transfer channel data to worker (zero-copy)
+      const channelData = Array.from({ length: audioBuffer.numberOfChannels }, (_, index) => {
+        const data = audioBuffer.getChannelData(index);
+        return new Float32Array(data);
+      });
+      const transferables = channelData.map((data) => data.buffer);
+      worker.postMessage({
+        channelData,
+        sampleRate: audioBuffer.sampleRate,
+        thresholdDb: options.thresholdDb,
+        minimumDuration: options.minimumDuration,
+        padding: options.padding,
+      }, transferables);
+    });
+  }
+
+  async function detectSilenceMainThread(audioBuffer, options, onProgress, isCancelled) {
     const { thresholdDb, minimumDuration, padding } = options;
     const threshold = 10 ** (thresholdDb / 20);
     const frameDuration = 0.025;
