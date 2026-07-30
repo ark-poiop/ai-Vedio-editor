@@ -95,7 +95,7 @@ export function createState() {
 
 // ─── State Operations ───────────────────────────────────────────────────────
 export function recalculate(project) {
-  const clipEnd = project.clips.reduce((max, clip) => Math.max(max, clip.timelineStart + clip.sourceEnd - clip.sourceStart), 0);
+  const clipEnd = project.clips.reduce((max, clip) => Math.max(max, clip.timelineStart + (clip.sourceEnd - clip.sourceStart) / (clip.speed || 1)), 0);
   const textEnd = project.texts.reduce((max, text) => Math.max(max, text.end), 0);
   return { ...project, duration: Math.max(15, clipEnd, textEnd), updatedAt: new Date().toISOString() };
 }

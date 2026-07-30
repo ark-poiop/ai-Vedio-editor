@@ -38,6 +38,11 @@ import {
     state.selections = [];
   }
 
+  /** Timeline duration of a clip accounting for speed */
+  function clipDuration(clip) { return (clip.sourceEnd - clip.sourceStart) / (clip.speed || 1); }
+  /** Source time at given timeline time for a clip accounting for speed */
+  function clipSourceTime(clip, timelineTime) { return clip.sourceStart + (timelineTime - clip.timelineStart) * (clip.speed || 1); }
+
   function persistUiPreferences() {
     try {
       localStorage.setItem(UI_PREFERENCE_KEY, JSON.stringify(state.ui));
@@ -441,7 +446,7 @@ import {
   }
 
   function currentClip(track, time = state.playhead) {
-    return state.project.clips.find((clip) => clip.trackId === track && time >= clip.timelineStart && time < clip.timelineStart + clip.sourceEnd - clip.sourceStart);
+    return state.project.clips.find((clip) => clip.trackId === track && time >= clip.timelineStart && time < clip.timelineStart + clipDuration(clip));
   }
 
   function mountApp() {
@@ -611,7 +616,7 @@ import {
     const visual = state.previewVisual;
     const badge = document.getElementById('reframeBadge');
     if (visual instanceof HTMLVideoElement && clip && asset && reframe) {
-      const sourceTime = clip.sourceStart + state.playhead - clip.timelineStart;
+      const sourceTime = clipSourceTime(clip, state.playhead);
       const focus = focusAtSourceTime(reframe, sourceTime);
       const previewCanvas = previewCanvasConfig();
       visual.style.objectPosition = objectPositionForFocus(
@@ -649,12 +654,12 @@ import {
       } else {
         const video = document.createElement('video');
         video.className = 'preview-media'; video.src = asset.url; video.playsInline = true; video.preload = 'auto';
-        video.volume = clip.volume; video.currentTime = Math.max(0, clip.sourceStart + state.playhead - clip.timelineStart);
+        video.volume = clip.volume; video.playbackRate = clip.speed || 1; video.currentTime = Math.max(0, clipSourceTime(clip, state.playhead));
         host.append(video); state.previewVisual = video;
         if (state.playing) void video.play().catch(() => { state.playing = false; renderPlayback(); });
       }
     } else if (clip && state.previewVisual instanceof HTMLVideoElement && !state.playing) {
-      const expected = clip.sourceStart + state.playhead - clip.timelineStart;
+      const expected = clipSourceTime(clip, state.playhead);
       if (Math.abs(state.previewVisual.currentTime - expected) > .08) state.previewVisual.currentTime = Math.max(0, expected);
     }
 
@@ -1433,7 +1438,7 @@ import {
     const accBody = (key) => acc[key] ? '' : ' hidden';
     root.innerHTML = `
       <section class="property-section">${accHead('canvas', '<h3>캔버스</h3>')}<div class="accordion-body"${accBody('canvas')}><label class="field"><span>화면 비율</span><select data-field="canvas-ratio"><option value="9:16" ${state.project.canvas.ratio === '9:16' ? 'selected' : ''}>9:16 · Shorts</option><option value="1:1" ${state.project.canvas.ratio === '1:1' ? 'selected' : ''}>1:1 · Square</option><option value="16:9" ${state.project.canvas.ratio === '16:9' ? 'selected' : ''}>16:9 · Landscape</option></select></label><div class="ratio-meta"><span>${state.project.canvas.width} × ${state.project.canvas.height}</span><em>30 FPS</em></div></div></section>
-      ${clip ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div>`)}<div class="accordion-body"${accBody('selection')}><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label></div></section>` : ''}
+      ${clip ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>선택한 클립</h3><span class="type-pill">${clip.trackId}</span></div>`)}<div class="accordion-body"${accBody('selection')}><p class="selected-name">${escapeHtml(asset?.name || '미디어 없음')}</p><div class="field-grid">${numberField('타임라인 시작', 'clip-timelineStart', clip.timelineStart)}${numberField('소스 시작', 'clip-sourceStart', clip.sourceStart, 0, clip.sourceEnd - .1)}${numberField('소스 종료', 'clip-sourceEnd', clip.sourceEnd, clip.sourceStart + .1, asset?.duration || '')}</div><label class="field"><span>볼륨 <b>${Math.round(clip.volume * 100)}%</b></span><input data-field="clip-volume" type="range" min="0" max="1" step="0.01" value="${clip.volume}"></label><label class="field"><span>속도 <b>${(clip.speed || 1).toFixed(2)}x</b></span><input data-field="clip-speed" type="range" min="0.25" max="4" step="0.05" value="${clip.speed || 1}"></label></div></section>` : ''}
       ${text ? `<section class="property-section">${accHead('selection', `<div class="section-title"><h3>${text.role === 'caption' ? '자막' : '텍스트'}</h3><span class="type-pill text">${text.role === 'caption' ? 'CC' : 'T'}</span></div>`)}<div class="accordion-body"${accBody('selection')}><label class="field"><span>내용</span><textarea data-field="text-text" rows="4">${escapeHtml(text.text)}</textarea></label><div class="field-grid">${numberField('시작', 'text-start', text.start)}${numberField('종료', 'text-end', text.end, text.start + .1)}</div><label class="field"><span>글자 크기 <b>${text.fontSize}px</b></span><input data-field="text-fontSize" type="range" min="24" max="120" value="${text.fontSize}"></label><label class="field"><span>굵기</span><select data-field="text-fontWeight">${[400,600,700,800,900].map((weight) => `<option value="${weight}" ${text.fontWeight === weight ? 'selected' : ''}>${weight}</option>`).join('')}</select></label><div class="color-fields"><label><span>글자</span><input data-field="text-color" type="color" value="${text.color}"></label><label><span>배경</span><input data-field="text-background" type="color" value="${text.background.slice(0,7)}"></label></div><div class="field-grid">${numberField('가로 위치 %', 'text-x', text.x, 0, 100)}${numberField('세로 위치 %', 'text-y', text.y, 0, 100)}</div></div></section>` : ''}
       ${!clip && !text ? '<div class="selection-empty"><div>◇</div><strong>요소를 선택하세요</strong><span>타임라인의 클립이나 텍스트를 선택하면 세부 속성을 편집할 수 있습니다.</span></div>' : ''}
       <section class="property-section caption-section">${accHead('captions', '<div class="ai-title"><span>CC</span><div><h3>자막 도구</h3><small>SRT · WebVTT</small></div></div>')}<div class="accordion-body"${accBody('captions')}><button id="importCaptionsButton">자막 파일 가져오기 <span>SRT/VTT</span></button><button id="exportCaptionsButton" ${state.project.texts.some((item) => item.role === 'caption') ? '' : 'disabled'}>자막 SRT 저장 <span>${state.project.texts.filter((item) => item.role === 'caption').length}개</span></button>${state.captionMessage ? `<p class="caption-message">${escapeHtml(state.captionMessage)}</p>` : ''}</div></section>
@@ -1450,7 +1455,7 @@ import {
       .filter((i) => i % interval === 0).map((i) => `<span style="left:${i * state.zoom}px">${formatTime(i)}</span>`).join('');
     const clips = (track) => state.project.clips.filter((clip) => clip.trackId === track).map((clip) => {
       const asset = state.project.assets.find((item) => item.id === clip.assetId);
-      const duration = clip.sourceEnd - clip.sourceStart;
+      const duration = clipDuration(clip);
       return `<div class="timeline-clip ${track} ${isSelected('clip', clip.id) ? 'is-selected' : ''}" data-select-clip="${clip.id}" draggable="true" style="left:${clip.timelineStart * state.zoom}px;width:${Math.max(18, duration * state.zoom)}px"><button class="trim-handle left" data-trim="start" data-clip="${clip.id}"></button>${asset?.thumbnail && track === 'video' ? `<span class="clip-thumb" style="background-image:url('${asset.thumbnail}')"></span>` : ''}<span class="clip-label"><b>${track === 'audio' ? '♪' : '▶'}</b>${escapeHtml(asset?.name || '미디어 없음')}</span><span class="clip-duration">${duration.toFixed(1)}s</span><button class="trim-handle right" data-trim="end" data-clip="${clip.id}"></button></div>`;
     }).join('');
     const texts = state.project.texts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${isSelected('text', text.id) ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
@@ -2816,14 +2821,14 @@ import {
         const time = Math.min(state.project.duration, (performance.now() - started) / 1000);
         context.fillStyle = state.project.canvas.background;
         context.fillRect(0, 0, width, height);
-        const clip = state.project.clips.find((item) => item.trackId === 'video' && time >= item.timelineStart && time < item.timelineStart + item.sourceEnd - item.sourceStart);
+        const clip = state.project.clips.find((item) => item.trackId === 'video' && time >= item.timelineStart && time < item.timelineStart + clipDuration(item));
         for (const [id, element] of elements) {
           if (element instanceof HTMLVideoElement && id !== clip?.assetId) element.pause();
         }
         if (clip) {
           const element = elements.get(clip.assetId);
           if (element instanceof HTMLVideoElement) {
-            const expected = clip.sourceStart + time - clip.timelineStart;
+            const expected = clipSourceTime(clip, time);
             if (activeId !== clip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
             element.volume = clip.volume;
             if (element.paused) void element.play();
@@ -2835,7 +2840,7 @@ import {
           } else if (element) drawCover(context, element, element.naturalWidth, element.naturalHeight, width, height);
         }
 
-        const audioClip = state.project.clips.find((item) => item.trackId === 'audio' && time >= item.timelineStart && time < item.timelineStart + item.sourceEnd - item.sourceStart);
+        const audioClip = state.project.clips.find((item) => item.trackId === 'audio' && time >= item.timelineStart && time < item.timelineStart + clipDuration(item));
         const activeVideoElement = clip && elements.get(clip.assetId);
         if (activeVideoElement instanceof HTMLVideoElement) activeVideoElement.muted = Boolean(audioClip);
         for (const [id, element] of audioElements) {
@@ -2844,7 +2849,7 @@ import {
         if (audioClip) {
           const element = audioElements.get(audioClip.assetId);
           if (element) {
-            const expected = audioClip.sourceStart + time - audioClip.timelineStart;
+            const expected = clipSourceTime(audioClip, time);
             if (activeAudioId !== audioClip.id || Math.abs(element.currentTime - expected) > .35) element.currentTime = expected;
             element.volume = audioClip.volume;
             if (element.paused) void element.play();
@@ -3119,6 +3124,7 @@ import {
       clip.sourceStart = Math.max(0, clip.sourceStart);
       clip.sourceEnd = Math.max(clip.sourceStart + .1, clip.sourceEnd);
       clip.volume = clamp(clip.volume, 0, 1);
+      clip.speed = clamp(clip.speed || 1, 0.25, 4);
     } else if (selection.kind === 'text') {
       const text = project.texts.find((item) => item.id === selection.id);
       if (!text) return;
