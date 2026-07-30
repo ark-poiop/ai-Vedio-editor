@@ -15,11 +15,13 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 2210
-      STT_PROVIDER: ${STT_PROVIDER:-mock}
+      STT_PROVIDER: ${STT_PROVIDER:-whisper-local}
+      WHISPER_URL: ${WHISPER_URL:-http://host.docker.internal:8787}
+      WHISPER_TIMEOUT_MS: ${WHISPER_TIMEOUT_MS:-600000}
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       ASSEMBLYAI_SPEAKER_LABELS: ${ASSEMBLYAI_SPEAKER_LABELS:-true}
       LLM_PROVIDER: ${LLM_PROVIDER:-disabled}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_REQUEST_TIMEOUT_MS: ${LLM_REQUEST_TIMEOUT_MS:-30000}
