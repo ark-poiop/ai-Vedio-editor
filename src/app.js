@@ -766,7 +766,7 @@ import {
       .filter((text) => state.playhead >= text.start && state.playhead <= text.end)
       .map((text) => {
         const kf = (text.keyframes && text.keyframes.length) ? interpolateTextKeyframes(text, state.playhead) : { x: text.x, y: text.y, fontSize: text.fontSize, opacity: text.opacity ?? 1 };
-        return `<div class="preview-text" data-select-text="${text.id}" style="left:${kf.x}%;top:${kf.y}%;max-width:${text.boxWidth || 92}%;color:${text.color};background:${text.background};font-size:${Math.max(12, kf.fontSize / 3.2)}px;font-weight:${text.fontWeight};font-family:${text.fontFamily || 'sans-serif'};text-align:${text.align};opacity:${kf.opacity}">${escapeHtml(text.text).replaceAll('\n', '<br>')}</div>`;
+        return `<div class="preview-text" data-select-text="${text.id}" style="left:${kf.x}%;top:${kf.y}%;width:${text.boxWidth || 92}%;color:${text.color};background:${text.background};font-size:${Math.max(12, kf.fontSize / 3.2)}px;font-weight:${text.fontWeight};font-family:${text.fontFamily || 'sans-serif'};text-align:${text.align};opacity:${kf.opacity}">${escapeHtml(text.text).replaceAll('\n', '<br>')}</div>`;
       }).join('');
   }
 
