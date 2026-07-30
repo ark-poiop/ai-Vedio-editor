@@ -3,6 +3,7 @@ import {
   DB_NAME, DB_STORE, MAX_HISTORY, LABEL_WIDTH, ratios, defaultUiPreferences,
   uid, clamp, clone, escapeHtml, formatTime, formatSize,
   emptyProject, createState, recalculate, persistable, normalizeUiPreferences,
+  PROJECT_LIST_KEY,
 } from './state.js';
 
 (() => {
@@ -522,8 +523,14 @@ import {
     renderSaveStatus();
     clearTimeout(state.saveTimer);
     state.saveTimer = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable(state.project)));
-      state.saveStatus = 'saved'; renderSaveStatus();
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable(state.project)));
+        state.saveStatus = 'saved';
+      } catch (error) {
+        state.saveStatus = 'error';
+        console.warn('[save] localStorage 저장 실패:', error.message);
+      }
+      renderSaveStatus();
     }, 450);
   }
 
@@ -589,10 +596,12 @@ import {
               <button id="appMenuButton" class="button menu-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="appMenu"><span>☰</span><em>메뉴</em></button>
               <div id="appMenu" class="app-menu" role="menu" hidden>
                 <div class="menu-heading">프로젝트</div>
+                <button role="menuitem" data-menu-action="new-project"><span>◇</span><div><strong>새 프로젝트</strong><small>현재 프로젝트 저장 후 새로 시작</small></div></button>
                 <button role="menuitem" data-menu-action="import-media"><span>＋</span><div><strong>미디어 가져오기</strong><small>영상·오디오·이미지</small></div></button>
                 <button role="menuitem" data-menu-action="import-captions"><span>CC</span><div><strong>자막 가져오기</strong><small>SRT · WebVTT</small></div></button>
                 <button role="menuitem" data-menu-action="download-app"><span>↓</span><div><strong>앱 파일 저장</strong><small>독립 실행형 HTML</small></div></button>
-                <button role="menuitem" data-menu-action="export-json"><span>{ }</span><div><strong>프로젝트 JSON</strong><small>편집 데이터 백업</small></div></button>
+                <button role="menuitem" data-menu-action="export-json"><span>{ }</span><div><strong>프로젝트 JSON 저장</strong><small>편집 데이터 백업</small></div></button>
+                <button role="menuitem" data-menu-action="import-json"><span>↑</span><div><strong>프로젝트 JSON 불러오기</strong><small>백업 복원</small></div></button>
                 <div class="menu-heading">편집</div>
                 <div class="menu-inline"><button role="menuitem" data-menu-action="undo">실행 취소</button><button role="menuitem" data-menu-action="redo">다시 실행</button></div>
                 <div class="menu-inline"><button role="menuitem" data-menu-action="split">분할</button><button role="menuitem" data-menu-action="delete">삭제</button></div>
@@ -2839,6 +2848,63 @@ import {
     downloadBlob(new Blob([JSON.stringify(persistable(state.project), null, 2)], { type: 'application/json' }), `${safeName(state.project.title)}.json`);
   }
 
+  function importProjectJson() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const project = JSON.parse(text);
+        if (!project || !project.id || !Array.isArray(project.clips)) throw new Error('유효하지 않은 프로젝트 파일입니다.');
+        // Ensure tracks exist
+        if (!project.tracks) project.tracks = [
+          { id: 'video', label: 'V1', type: 'video' },
+          { id: 'text', label: 'T1', type: 'text' },
+          { id: 'audio', label: 'A1', type: 'audio' },
+        ];
+        state.past.push(clone(state.project));
+        if (state.past.length > MAX_HISTORY) state.past.shift();
+        state.future = [];
+        state.project = recalculate(project);
+        state.selection = null;
+        state.selections = [];
+        scheduleSave();
+        renderAll();
+      } catch (error) {
+        alert(`프로젝트 불러오기 실패: ${error.message}`);
+      }
+    };
+    input.click();
+  }
+
+  function newProject() {
+    // Save current project to list
+    saveProjectToList(state.project);
+    // Create fresh project
+    state.past = [];
+    state.future = [];
+    state.project = emptyProject();
+    state.selection = null;
+    state.selections = [];
+    scheduleSave();
+    renderAll();
+  }
+
+  function saveProjectToList(project) {
+    try {
+      const list = JSON.parse(localStorage.getItem(PROJECT_LIST_KEY) || '[]');
+      const existing = list.findIndex((p) => p.id === project.id);
+      const entry = { id: project.id, title: project.title, updatedAt: project.updatedAt, duration: project.duration };
+      if (existing >= 0) list[existing] = entry;
+      else list.unshift(entry);
+      localStorage.setItem(PROJECT_LIST_KEY, JSON.stringify(list.slice(0, 20)));
+      localStorage.setItem(`shortform-studio:project:${project.id}`, JSON.stringify(persistable(project)));
+    } catch { /* quota exceeded — ignore */ }
+  }
+
   function downloadStandaloneApp() {
     const source = `<!doctype html>\n${document.documentElement.outerHTML}`;
     downloadBlob(new Blob([source], { type: 'text/html;charset=utf-8' }), 'shortform-studio.html');
@@ -3162,9 +3228,11 @@ import {
       const action = event.target.closest('[data-menu-action]')?.dataset.menuAction;
       if (!action) return;
       if (action === 'import-media') document.getElementById('fileInput').click();
+      else if (action === 'new-project') newProject();
       else if (action === 'import-captions') document.getElementById('captionInput').click();
       else if (action === 'download-app') downloadStandaloneApp();
       else if (action === 'export-json') downloadJson();
+      else if (action === 'import-json') importProjectJson();
       else if (action === 'undo') undo();
       else if (action === 'redo') redo();
       else if (action === 'split') splitSelected();
@@ -3493,6 +3561,14 @@ import {
       else if(event.key.toLowerCase()==='j'){event.preventDefault();if(state.playing)stopPlayback();seek(state.playhead-1/30);}
       else if(event.key.toLowerCase()==='k'){event.preventDefault();togglePlayback();}
       else if(event.key.toLowerCase()==='l'){event.preventDefault();if(state.playing)stopPlayback();seek(state.playhead+1/30);}
+    });
+
+    // Warn before closing with unsaved changes
+    window.addEventListener('beforeunload', (event) => {
+      if (state.past.length > 0 || state.saveStatus === 'saving') {
+        event.preventDefault();
+        event.returnValue = '';
+      }
     });
   }
 

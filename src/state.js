@@ -5,6 +5,7 @@
 
 // ─── Storage Keys ───────────────────────────────────────────────────────────
 export const STORAGE_KEY = 'shortform-studio:project:v1';
+export const PROJECT_LIST_KEY = 'shortform-studio:project-list:v1';
 export const REFRAME_DRAFT_KEY = 'shortform-studio:reframe-draft:v1';
 export const LLM_PREFERENCE_KEY = 'shortform-studio:llm-preference:v1';
 export const UI_PREFERENCE_KEY = 'shortform-studio:ui-preference:v1';
