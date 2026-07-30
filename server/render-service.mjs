@@ -335,6 +335,10 @@ export function buildRenderPlan(project, assetFiles, probes, quality = 'draft') 
     const file = assetFiles.get(clip.assetId);
     if (!asset || !file) continue;
     if (asset.kind === 'image') inputArgs.push('-loop', '1', '-framerate', '30');
+    else if (asset.kind === 'video' || asset.kind === 'audio') {
+      // Fast seek to near clip start (keyframe-based), trim does precise cut
+      inputArgs.push('-ss', Math.max(0, clip.sourceStart - 0.5).toFixed(6));
+    }
     inputArgs.push('-i', file.path);
     inputClips.push({ clip, asset, inputIndex: inputClips.length, probe: probes.get(clip.assetId) || {} });
   }
