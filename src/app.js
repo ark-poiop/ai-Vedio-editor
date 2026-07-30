@@ -3231,25 +3231,49 @@ import {
       const clipEl=event.target.closest('[data-select-clip]');
       const textEl=event.target.closest('[data-select-text]');
       if(clipEl||textEl){
-        // Clip/text drag move
+        // Clip/text drag move (X=time, Y=track change)
         event.preventDefault();
         const id=clipEl?clipEl.dataset.selectClip:textEl.dataset.selectText;
         const kind=clipEl?'clip':'text';
         if(!isSelected(kind,id))selectSingle(kind,id);
         const startX=event.clientX;
+        const startY=event.clientY;
         const startPositions=state.selections.map((s)=>{
-          if(s.kind==='clip'){const c=state.project.clips.find((i)=>i.id===s.id);return{...s,start:c?.timelineStart||0};}
-          const t=state.project.texts.find((i)=>i.id===s.id);return{...s,start:t?.start||0};
+          if(s.kind==='clip'){const c=state.project.clips.find((i)=>i.id===s.id);return{...s,start:c?.timelineStart||0,trackId:c?.trackId};}
+          const t=state.project.texts.find((i)=>i.id===s.id);return{...s,start:t?.start||0,trackId:t?.trackId||'text'};
         });
         let moved=false;
-        const onMove=(e)=>{const delta=(e.clientX-startX)/state.zoom;if(Math.abs(delta)<0.05)return;moved=true;
+        const onMove=(e)=>{
+          const deltaX=(e.clientX-startX)/state.zoom;
+          if(Math.abs(deltaX)>=0.05||Math.abs(e.clientY-startY)>10)moved=true;
+          if(!moved)return;
           for(const sp of startPositions){
-            if(sp.kind==='clip'){const c=state.project.clips.find((i)=>i.id===sp.id);if(c)c.timelineStart=Math.max(0,sp.start+delta);}
-            else{const t=state.project.texts.find((i)=>i.id===sp.id);if(t){const dur=t.end-t.start;t.start=Math.max(0,sp.start+delta);t.end=t.start+dur;}}
+            if(sp.kind==='clip'){const c=state.project.clips.find((i)=>i.id===sp.id);if(c)c.timelineStart=Math.max(0,sp.start+deltaX);}
+            else{const t=state.project.texts.find((i)=>i.id===sp.id);if(t){const dur=t.end-t.start;t.start=Math.max(0,sp.start+deltaX);t.end=t.start+dur;}}
           }
           state.project=recalculate(state.project);renderTimeline();renderPlayback();
         };
-        const onUp=()=>{window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);
+        const onUp=(e)=>{
+          window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);
+          // Detect target track from drop Y position
+          const dropTarget=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-track-id]');
+          if(dropTarget&&moved){
+            const targetTrackId=dropTarget.dataset.trackId;
+            const targetTrack=(state.project.tracks||[]).find((t)=>t.id===targetTrackId);
+            if(targetTrack){
+              for(const sp of startPositions){
+                if(sp.kind==='clip'){
+                  const c=state.project.clips.find((i)=>i.id===sp.id);
+                  const asset=c&&state.project.assets.find((a)=>a.id===c.assetId);
+                  const clipType=asset?.kind==='audio'?'audio':'video';
+                  if(c&&targetTrack.type===clipType)c.trackId=targetTrackId;
+                }else{
+                  const t=state.project.texts.find((i)=>i.id===sp.id);
+                  if(t&&targetTrack.type==='text')t.trackId=targetTrackId;
+                }
+              }
+            }
+          }
           if(moved){state.past.push(clone(state.project));if(state.past.length>MAX_HISTORY)state.past.shift();state.future=[];scheduleSave();}
           renderAll();
         };
