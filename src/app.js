@@ -38,6 +38,14 @@ import {
     state.selections = [];
   }
 
+  function selectAllTimeline() {
+    const clips = state.project.clips.map((clip) => ({ kind: 'clip', id: clip.id }));
+    const texts = state.project.texts.map((text) => ({ kind: 'text', id: text.id }));
+    state.selections = [...clips, ...texts];
+    state.selection = state.selections.at(-1) || null;
+    renderAll();
+  }
+
   /** Timeline duration of a clip accounting for speed */
   function clipDuration(clip) { return (clip.sourceEnd - clip.sourceStart) / (clip.speed || 1); }
   /** Source time at given timeline time for a clip accounting for speed */
@@ -3224,6 +3232,7 @@ import {
       if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redo():undo();}
       else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'){event.preventDefault();redo();}
       else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='d'){event.preventDefault();duplicateSelection();}
+      else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='a'){event.preventDefault();selectAllTimeline();}
       else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelection();}
       else if(event.key.toLowerCase()==='s'&&!(event.ctrlKey||event.metaKey)){event.preventDefault();splitSelected();}
       else if(event.code==='Space'){event.preventDefault();togglePlayback();}
