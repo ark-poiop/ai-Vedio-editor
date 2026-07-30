@@ -2506,8 +2506,23 @@ import {
       let audioBuffer;
       try {
         audioBuffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
-      } catch (decodeError) {
-        throw new Error(`오디오 디코딩 실패: 이 미디어 형식은 브라우저에서 직접 분석할 수 없습니다. (${decodeError?.message || '지원하지 않는 코덱'})`);
+      } catch {
+        // Browser can't decode (e.g., HEVC MOV) — try server-side FFmpeg extraction
+        renderSilenceState({ progress: 0.06, message: '서버에서 오디오를 추출하고 있습니다.' });
+        if (isCancelled()) return;
+        try {
+          const extractResponse = await fetch('/api/audio/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': blob.type || 'video/mp4' },
+            body: blob,
+          });
+          if (!extractResponse.ok) throw new Error(`서버 오디오 추출 실패 (${extractResponse.status})`);
+          const wavBuffer = await extractResponse.arrayBuffer();
+          if (isCancelled()) return;
+          audioBuffer = await audioContext.decodeAudioData(wavBuffer);
+        } catch (serverError) {
+          throw new Error(`오디오 디코딩 실패: 브라우저와 서버 모두 이 미디어를 분석할 수 없습니다. (${serverError?.message || '알 수 없는 오류'})`);
+        }
       }
       if (isCancelled()) return;
       renderSilenceState({ status: 'analyzing', progress: 0.12, message: 'RMS 음량을 분석하고 있습니다.' });

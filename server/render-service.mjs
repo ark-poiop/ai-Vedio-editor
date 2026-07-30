@@ -554,6 +554,58 @@ export function createRenderService({
       return true;
     }
 
+    // Audio extraction: upload media → FFmpeg → return PCM WAV for browser analysis
+    if (request.method === 'POST' && url.pathname === '/api/audio/extract') {
+      try {
+        if (closing) throw Object.assign(new Error('서비스가 종료 중입니다.'), { statusCode: 503 });
+        const capability = await capabilities();
+        if (!capability.available) throw Object.assign(new Error('FFmpeg가 설치되어 있지 않습니다.'), { statusCode: 503 });
+        const contentLength = Number(request.headers['content-length'] || 0);
+        if (contentLength > maximumUploadBytes) throw Object.assign(new Error('파일이 너무 큽니다.'), { statusCode: 413 });
+        await ensureRoot();
+        const inputPath = join(storageRoot, `extract-${randomUUID()}.input`);
+        const outputPath = join(storageRoot, `extract-${randomUUID()}.wav`);
+        const writeStream = createWriteStream(inputPath);
+        let received = 0;
+        await new Promise((resolve, reject) => {
+          request.on('data', (chunk) => {
+            received += chunk.length;
+            if (received > maximumUploadBytes) { writeStream.destroy(); reject(Object.assign(new Error('파일이 너무 큽니다.'), { statusCode: 413 })); }
+            else writeStream.write(chunk);
+          });
+          request.on('end', () => { writeStream.end(resolve); });
+          request.on('error', reject);
+        });
+        // Extract audio as 16kHz mono WAV (smallest useful format for analysis)
+        await new Promise((resolve, reject) => {
+          const proc = processRunner(ffmpegPath, [
+            '-hide_banner', '-y', '-i', inputPath,
+            '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+            outputPath,
+          ]);
+          proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`FFmpeg 오디오 추출 실패 (code ${code})`)));
+          proc.on('error', reject);
+        });
+        const wavStat = await stat(outputPath);
+        response.writeHead(200, {
+          'Content-Type': 'audio/wav',
+          'Content-Length': wavStat.size,
+          'Cache-Control': 'no-store',
+        });
+        const readStream = createReadStream(outputPath);
+        readStream.pipe(response);
+        readStream.on('end', async () => {
+          await rm(inputPath, { force: true }).catch(() => {});
+          await rm(outputPath, { force: true }).catch(() => {});
+        });
+        return true;
+      } catch (error) {
+        const status = error.statusCode || 500;
+        sendJson(response, status, { error: error.message || '오디오 추출에 실패했습니다.' });
+        return true;
+      }
+    }
+
     const assetMatch = url.pathname.match(/^\/api\/render\/assets\/([a-zA-Z0-9_-]{1,128})$/);
     if (assetMatch) {
       if (request.method !== 'POST') {
