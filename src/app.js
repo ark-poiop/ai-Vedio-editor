@@ -58,7 +58,9 @@ import {
       const prefix = type === 'video' ? 'V' : type === 'text' ? 'T' : 'A';
       const id = `${type}-${uid().slice(0, 8)}`;
       const label = `${prefix}${num}`;
-      project.tracks.push({ id, label, type });
+      // Insert after the last track of the same type
+      const lastIndex = project.tracks.findLastIndex((t) => t.type === type);
+      project.tracks.splice(lastIndex + 1, 0, { id, label, type });
       return project;
     });
   }
@@ -1582,14 +1584,16 @@ import {
       { id: 'audio', label: 'A1', type: 'audio' },
     ];
     const trackRows = tracks.map((track) => {
+      const sameTypeCount = tracks.filter((t) => t.type === track.type).length;
+      const deleteBtn = sameTypeCount > 1 ? `<button class="track-delete" data-remove-track="${track.id}" title="트랙 삭제">×</button>` : '';
       if (track.type === 'text') {
         const trackTexts = state.project.texts.filter((t) => (t.trackId || 'text') === track.id);
         const textHtml = trackTexts.map((text) => `<div class="timeline-clip text ${text.role === 'caption' ? 'caption' : ''} ${isSelected('text', text.id) ? 'is-selected' : ''}" data-select-text="${text.id}" style="left:${text.start * state.zoom}px;width:${Math.max(24, (text.end-text.start)*state.zoom)}px"><span class="clip-label"><b>${text.role === 'caption' ? 'CC' : 'T'}</b>${escapeHtml(text.text)}</span></div>`).join('');
-        return `<div class="track-row text-track" data-track-id="${track.id}"><div class="track-label"><b>${escapeHtml(track.label)}</b><span>텍스트·자막</span></div><div class="track-lane" style="width:${width}px">${textHtml}</div></div>`;
+        return `<div class="track-row text-track" data-track-id="${track.id}"><div class="track-label"><b>${escapeHtml(track.label)}</b><span>텍스트·자막</span>${deleteBtn}</div><div class="track-lane" style="width:${width}px">${textHtml}</div></div>`;
       }
       const trackClips = clips(track.id);
       const typeLabel = track.type === 'video' ? '영상' : '오디오';
-      return `<div class="track-row" data-track-id="${track.id}"><div class="track-label"><b>${escapeHtml(track.label)}</b><span>${typeLabel}</span></div><div class="track-lane" style="width:${width}px">${trackClips}</div></div>`;
+      return `<div class="track-row" data-track-id="${track.id}"><div class="track-label"><b>${escapeHtml(track.label)}</b><span>${typeLabel}</span>${deleteBtn}</div><div class="track-lane" style="width:${width}px">${trackClips}</div></div>`;
     }).join('');
     document.getElementById('timelineContent').innerHTML = `<div class="timeline-label-spacer">TIME</div><div class="timeline-ruler" style="margin-left:${LABEL_WIDTH}px;width:${width}px">${ruler}</div><div class="playhead" style="left:${LABEL_WIDTH + state.playhead * state.zoom}px"><i></i><span></span></div>${trackRows}<div class="track-actions"><button id="addTrackButton" class="small-action" title="트랙 추가">+ 트랙</button></div>`;
     document.getElementById('elementCount').textContent = `${state.project.clips.length + state.project.texts.length}개 요소`;

@@ -297,9 +297,12 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .timeline-ruler { position: absolute; top: 0; height: 28px; border-bottom: 1px solid var(--line); background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(var(--tick, 18px) - 1px), rgba(255,255,255,.08) var(--tick, 18px)); }
 .timeline-ruler span { position: absolute; top: 7px; transform: translateX(-50%); color: #6f7b8d; font-size: var(--fs-2xs); }
 .track-row { position: relative; display: grid; grid-template-columns: 88px auto; height: 68px; }
-.track-label { position: sticky; left: 0; z-index: 7; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); border-bottom: 1px solid #181f2a; background: #0d1219; }
+.track-label { position: sticky; left: 0; z-index: 7; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); border-bottom: 1px solid #181f2a; background: #0d1219; position: relative; }
 .track-label b { color: #bac3cf; font-size: var(--fs-sm); }
 .track-label span { color: #606c7d; font-size: var(--fs-2xs); }
+.track-delete { position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; display: grid; place-items: center; border: none; border-radius: 3px; background: rgba(255,107,120,.15); color: var(--danger); font-size: var(--fs-2xs); line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.track-label:hover .track-delete { opacity: 1; }
+.track-delete:hover { background: rgba(255,107,120,.3); }
 .track-lane { position: relative; border-bottom: 1px solid #181f2a; background-image: linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px); background-size: 90px 100%; }
 .text-track { height: 54px; }
 .track-actions { padding: 6px 0 6px 88px; }
