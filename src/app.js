@@ -2687,14 +2687,14 @@ import {
           };
         });
       });
-      // Snap adjacent clips to eliminate micro-gaps (floating point drift)
+      // Snap adjacent clips to eliminate gaps (force sequential placement)
       const tracks = ['video', 'audio'];
       for (const trackId of tracks) {
         const trackClips = project.clips.filter((c) => c.trackId === trackId).sort((a, b) => a.timelineStart - b.timelineStart);
         for (let i = 1; i < trackClips.length; i++) {
-          const prevEnd = trackClips[i - 1].timelineStart + (trackClips[i - 1].sourceEnd - trackClips[i - 1].sourceStart);
-          const gap = trackClips[i].timelineStart - prevEnd;
-          if (gap > 0 && gap < 0.05) {
+          const prevEnd = trackClips[i - 1].timelineStart + (trackClips[i - 1].sourceEnd - trackClips[i - 1].sourceStart) / (trackClips[i - 1].speed || 1);
+          // Force next clip to start exactly where previous ends
+          if (trackClips[i].timelineStart > prevEnd && trackClips[i].timelineStart - prevEnd < 2) {
             trackClips[i].timelineStart = prevEnd;
           }
         }
