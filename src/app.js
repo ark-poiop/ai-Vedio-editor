@@ -1261,7 +1261,7 @@ import {
     } catch (reason) {
       if (state.shortform.analysisVersion !== analysisVersion) throw shortformAbortError();
       if (reason?.name === 'AbortError' && state.llm.semanticAssist) throw reason;
-      return { candidates, enhanced: false, warning: ' LLM 보강에 실패해 기본 후보를 유지했습니다.' };
+      return { candidates, enhanced: false, warning: ` LLM 보강에 실패해 기본 후보를 유지했습니다. (${reason instanceof Error ? reason.message : '알 수 없는 오류'})` };
     } finally {
       if (state.llm.controller === controller) state.llm.controller = null;
     }
