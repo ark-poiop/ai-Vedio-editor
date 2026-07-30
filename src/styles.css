@@ -198,7 +198,7 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .canvas-empty strong { color: #abb5c4; font-size: var(--fs-base); }
 .canvas-empty span { margin-top: 7px; font-size: var(--fs-xs); line-height: 1.6; }
 .safe-zone { position: absolute; inset: 6%; border: 1px dashed rgba(255,255,255,.15); pointer-events: none; }
-.preview-text { position: absolute; box-sizing: border-box; padding: .18em .35em; transform: translate(-50%, -50%); line-height: 1.2; white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; cursor: pointer; text-shadow: 0 2px 7px rgba(0,0,0,.35); }
+.preview-text { position: absolute; box-sizing: border-box; padding: .18em .35em; transform: translate(-50%, -50%); line-height: 1.2; white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; cursor: grab; text-shadow: 0 2px 7px rgba(0,0,0,.35); user-select: none; }
 .preview-text:hover { outline: 1px dashed var(--primary); }
 .range-with-input { display: flex; align-items: center; gap: 8px; }
 .range-with-input input[type="range"] { flex: 1; min-width: 0; }

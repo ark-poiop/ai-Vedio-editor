@@ -3180,7 +3180,44 @@ import {
     document.getElementById('exportButton').onclick=()=>{if(hasPendingReframe())return;state.settingsOpen=false;state.exportOpen=true;state.exportError='';renderModal();void refreshRenderCapability();};
 
     document.getElementById('assetList').onclick=(event)=>{const add=event.target.closest('[data-add-asset]'),remove=event.target.closest('[data-remove-asset]'),select=event.target.closest('[data-select-asset]');if(add){event.stopPropagation();addAssetToTimeline(add.dataset.addAsset);}else if(remove){event.stopPropagation();void removeAsset(remove.dataset.removeAsset);}else if(select){state.selection={kind:'asset',id:select.dataset.selectAsset};renderAll();}};
-    document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){state.selection={kind:'text',id:target.dataset.selectText};renderAll();}};
+    document.getElementById('textLayer').onclick=(event)=>{const target=event.target.closest('[data-select-text]');if(target){selectSingle('text',target.dataset.selectText);renderAll();}};
+    document.getElementById('textLayer').onmousedown=(event)=>{
+      const target=event.target.closest('[data-select-text]');
+      if(!target||event.button!==0)return;
+      event.preventDefault();
+      const textId=target.dataset.selectText;
+      selectSingle('text',textId);
+      const text=state.project.texts.find((t)=>t.id===textId);
+      if(!text)return;
+      const frame=document.getElementById('canvasFrame');
+      const frameRect=frame.getBoundingClientRect();
+      const startX=event.clientX,startY=event.clientY;
+      const startTextX=text.x,startTextY=text.y;
+      let moved=false;
+      const onMove=(e)=>{
+        const dx=(e.clientX-startX)/frameRect.width*100;
+        const dy=(e.clientY-startY)/frameRect.height*100;
+        if(Math.abs(dx)<0.5&&Math.abs(dy)<0.5&&!moved)return;
+        moved=true;
+        text.x=clamp(startTextX+dx,0,100);
+        text.y=clamp(startTextY+dy,0,100);
+        renderPreviewTexts();
+      };
+      const onUp=()=>{
+        window.removeEventListener('mousemove',onMove);
+        window.removeEventListener('mouseup',onUp);
+        if(moved){
+          state.past.push(clone(state.project));
+          if(state.past.length>MAX_HISTORY)state.past.shift();
+          state.future=[];
+          state.project=recalculate(state.project);
+          scheduleSave();
+        }
+        renderAll();
+      };
+      window.addEventListener('mousemove',onMove);
+      window.addEventListener('mouseup',onUp);
+    };
     const timeline=document.getElementById('timelineScroll');
     timeline.onclick=(event)=>{if(event.target.id==='addTrackButton'){const type=prompt('추가할 트랙 종류를 선택하세요:\nvideo, text, audio','video');if(type&&['video','text','audio'].includes(type))addTrack(type);return;}if(event.target.closest('[data-remove-track]')){removeTrack(event.target.closest('[data-remove-track]').dataset.removeTrack);return;}const clip=event.target.closest('[data-select-clip]'),text=event.target.closest('[data-select-text]');if(clip){const kind='clip',id=clip.dataset.selectClip;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}if(text){const kind='text',id=text.dataset.selectText;if(event.ctrlKey||event.metaKey)selectToggle(kind,id);else if(event.shiftKey)selectAdd(kind,id);else selectSingle(kind,id);renderAll();return;}const rect=timeline.getBoundingClientRect();seek((event.clientX-rect.left+timeline.scrollLeft-LABEL_WIDTH)/state.zoom);};
     timeline.ondragstart=(event)=>event.preventDefault();
