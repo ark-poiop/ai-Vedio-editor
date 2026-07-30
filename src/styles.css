@@ -308,6 +308,8 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 .track-actions { padding: 6px 0 6px 88px; }
 .track-actions button { padding: 4px 12px; border: 1px dashed var(--line-bright); border-radius: 5px; background: none; color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
 .track-actions button:hover { border-color: var(--primary); color: var(--primary); }
+.small-action { width: 100%; height: 28px; display: flex; align-items: center; justify-content: center; margin-top: 6px; padding: 0 9px; border: 1px solid var(--line-bright); border-radius: 7px; background: #101820; color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.small-action:hover { border-color: var(--primary); background: #17231a; color: var(--primary); }
 .timeline-clip { position: absolute; top: 7px; bottom: 7px; min-width: 18px; display: flex; align-items: center; overflow: hidden; border: 1px solid #6555b6; border-radius: 6px; background: #2a2354; cursor: grab; }
 .timeline-clip.video { background: linear-gradient(90deg, #27204c, #332866); }
 .timeline-clip.audio { border-color: #31828a; background: #163c42; }
@@ -446,9 +448,9 @@ body.is-resizing:has(.timeline-resizer:hover) { cursor: ns-resize; }
 /* automatic short-form candidate review */
 .shortform-section { background: linear-gradient(160deg, rgba(255,184,77,.08), transparent 72%); }
 .shortform-section .ai-title > span { background: rgba(255,184,77,.13); color: #ffc268; font-size: var(--fs-base); font-weight: 900; }
-.shortform-section > button, .shortform-section .proposal-actions button, .shortform-status button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #55442d; border-radius: 7px; background: #1b1711; color: #ddc29a; font-size: var(--fs-xs); }
-.shortform-section > button:hover:not(:disabled), .shortform-section .proposal-actions button:hover:not(:disabled) { border-color: #ffc268; background: #241d13; color: #ffe4bc; }
-.shortform-section > button span { padding: 2px 5px; border-radius: 4px; background: rgba(255,194,104,.09); color: #ffc268; font-size: var(--fs-2xs); }
+.shortform-section button, .shortform-section .proposal-actions button, .shortform-status button { width: 100%; height: 31px; display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding: 0 9px; border: 1px solid #55442d; border-radius: 7px; background: #1b1711; color: #ddc29a; font-size: var(--fs-xs); }
+.shortform-section button:hover:not(:disabled), .shortform-section .proposal-actions button:hover:not(:disabled) { border-color: #ffc268; background: #241d13; color: #ffe4bc; }
+.shortform-section button span { padding: 2px 5px; border-radius: 4px; background: rgba(255,194,104,.09); color: #ffc268; font-size: var(--fs-2xs); }
 .shortform-message { margin: 8px 0 0; padding: 7px 8px; border-radius: 6px; background: rgba(255,194,104,.07); color: #d4bb95; font-size: var(--fs-2xs); line-height: 1.5; }
 .shortform-message.error { background: rgba(255,107,120,.08); color: #ffafb6; }
 .shortform-status { margin-top: 9px; padding: 9px; border: 1px solid #55442d; border-radius: 8px; background: rgba(31,25,16,.8); }
