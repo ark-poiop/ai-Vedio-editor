@@ -71,12 +71,8 @@ function validateProviderUrl(value) {
   } catch {
     throw new Error('LLM_BASE_URL 형식을 확인하세요.');
   }
-  const localHttpHosts = new Set([
-    'localhost', '127.0.0.1', '[::1]', 'host.docker.internal',
-  ]);
-  const localHttp = url.protocol === 'http:' && localHttpHosts.has(url.hostname.toLowerCase());
-  if (url.protocol !== 'https:' && !localHttp) {
-    throw new Error('LLM_BASE_URL은 HTTPS 또는 Docker Desktop/loopback HTTP 주소여야 합니다.');
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('LLM_BASE_URL은 http:// 또는 https:// 프로토콜이어야 합니다.');
   }
   if (url.username || url.password || url.search || url.hash) throw new Error('LLM_BASE_URL에 자격 증명, query 또는 fragment를 넣을 수 없습니다.');
   return url;
@@ -97,10 +93,6 @@ function validateRuntimeConfiguration(payload) {
     baseUrl = validateProviderUrl(String(payload.baseUrl || '').trim());
   } catch (error) {
     throw serviceError(error instanceof Error ? error.message : 'LLM_BASE_URL 형식을 확인하세요.');
-  }
-  const localHosts = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal']);
-  if (!localHosts.has(baseUrl.hostname.toLowerCase())) {
-    throw serviceError('웹 설정에서는 이 컴퓨터의 로컬 LLM 주소만 사용할 수 있습니다.');
   }
   const model = String(payload.model || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
   if (!model || model.length > 160) throw serviceError('로컬 LLM model ID는 1~160자여야 합니다.');
