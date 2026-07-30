@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createAssemblyAiProvider } from './assemblyai-provider.mjs';
+import { createWhisperLocalProvider } from './whisper-provider.mjs';
 
 const DEFAULT_MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_SEGMENT_COUNT = 20000;
@@ -139,6 +140,10 @@ export function createSttProvider(environment = process.env) {
   if (providerName === 'webhook') return createWebhookProvider({
     url: environment.STT_PROVIDER_URL,
     apiKey: environment.STT_PROVIDER_API_KEY,
+  });
+  if (providerName === 'whisper-local' || providerName === 'whisper') return createWhisperLocalProvider({
+    baseUrl: environment.WHISPER_URL || environment.STT_PROVIDER_URL || 'http://localhost:8787',
+    timeoutMs: Number(environment.WHISPER_TIMEOUT_MS) || 10 * 60 * 1000,
   });
   throw new Error(`지원하지 않는 STT Provider입니다: ${providerName}`);
 }
